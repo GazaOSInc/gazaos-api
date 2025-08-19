@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GazaOSInc/gazaos-api.git"
+    "url": "git+https://github.com/GazaOSInc/update-catalog.git"
   },
   "keywords": [
     "gazaos",
@@ -19,9 +19,9 @@
   "author": "GazaOS Inc",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/GazaOSInc/gazaos-api/issues"
+    "url": "https://github.com/GazaOSInc/update-catalog/issues"
   },
-  "homepage": "https://github.com/GazaOSInc/gazaos-api#readme",
+  "homepage": "https://github.com/GazaOSInc/update-catalog#readme",
   "dependencies": {
     "body-parser": "^2.2.0",
     "cookie-parser": "^1.4.7",

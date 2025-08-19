@@ -1,0 +1,25 @@
+{
+  "name": "gazaos-api",
+  "version": "1.0.0",
+  "description": "GazaOS API",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GazaOSInc/gazaos-api.git"
+  },
+  "keywords": [
+    "gazaos",
+    "api",
+    "gazaos",
+    "api"
+  ],
+  "author": "GazaOS Inc",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/GazaOSInc/gazaos-api/issues"
+  },
+  "homepage": "https://github.com/GazaOSInc/gazaos-api#readme"
+}

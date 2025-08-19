@@ -1,3 +1,7 @@
+// -------------------- Load environment variables --------------------
+require('dotenv').config();
+
+// -------------------- Imports --------------------
 const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
@@ -6,15 +10,17 @@ const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const { v4: uuidv4 } = require('uuid');
 
+// -------------------- App and Config --------------------
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const UPLOAD_DIR = path.join(__dirname, process.env.UPLOAD_DIR || 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-const IMAGE_DIR = path.join(__dirname, 'images');
+
+const IMAGE_DIR = path.join(__dirname, process.env.IMAGE_DIR || 'images');
 if (!fs.existsSync(IMAGE_DIR)) fs.mkdirSync(IMAGE_DIR);
 
 app.use('/uploads', express.static(UPLOAD_DIR));
@@ -40,8 +46,8 @@ function getSessionId(req, res) {
 }
 
 // -------------------- Basic Auth for Upload --------------------
-const UPLOAD_USER = 'admin';
-const UPLOAD_PASS = 'password123';
+const UPLOAD_USER = process.env.UPLOAD_USER || 'admin';
+const UPLOAD_PASS = process.env.UPLOAD_PASS || 'password123';
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -276,7 +282,7 @@ window.onload=function(){ initHybridBasket().then(()=>fetchTable()); };
   res.send(html);
 });
 
-// -------------------- Upload Page with Progress Bar & Auth --------------------
+// -------------------- Upload Page --------------------
 app.get('/upload', authMiddleware, (req,res)=>{
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -310,15 +316,22 @@ a{display:block;margin-top:10px;text-align:center;color:#0078d7;}
 <a href="/">Back to Catalog</a>
 <script>
 const form=document.getElementById('uploadForm');
+const progressContainer=document.getElementById('progressContainer');
+const progressBar=document.getElementById('progressBar');
 form.addEventListener('submit',e=>{
   e.preventDefault();
-  const file=form.file.files[0]; if(!file)return;
-  const data=new FormData(); data.append('file',file); data.append('name',form.name.value); data.append('description',form.description.value); data.append('tag',form.tag.value);
+  const file=form.file.files[0]; if(!file) return alert('Select file');
+  const formData=new FormData(form);
   const xhr=new XMLHttpRequest();
   xhr.open('POST','/upload',true);
-  xhr.upload.onprogress=function(e){ if(e.lengthComputable){ const p=Math.round(e.loaded/e.total*100); document.getElementById('progressContainer').style.display='block'; document.getElementById('progressBar').style.width=p+'%'; document.getElementById('progressBar').textContent=p+'%'; } };
-  xhr.onload=function(){ if(xhr.status===200) alert('Upload complete!'); else alert('Error'); document.getElementById('progressContainer').style.display='none'; document.getElementById('progressBar').style.width='0%'; document.getElementById('progressBar').textContent='0%'; form.reset(); };
-  xhr.send(data);
+  xhr.upload.onprogress=e=>{
+    progressContainer.style.display='block';
+    const percent=Math.round((e.loaded/e.total)*100);
+    progressBar.style.width=percent+'%';
+    progressBar.textContent=percent+'%';
+  };
+  xhr.onload=()=>{ if(xhr.status===200){alert('Upload successful'); form.reset(); progressBar.style.width='0%'; progressBar.textContent='0%'; progressContainer.style.display='none';} else alert('Upload failed'); };
+  xhr.send(formData);
 });
 </script>
 </body></html>`);
@@ -345,7 +358,6 @@ app.get('/api/list-update', (req,res)=>{
   let meta = readMetadata();
   const page = parseInt(req.query.page)||1;
   const limit = parseInt(req.query.limit)||10;
-  
   // Filtering
   Object.keys(req.query).forEach(k=>{
     if(k.startsWith('filter_') && req.query[k]){
@@ -353,7 +365,6 @@ app.get('/api/list-update', (req,res)=>{
       meta = meta.filter(m=> String(m[col]||'').toLowerCase().includes(val) );
     }
   });
-  
   // Sorting
   const sorts = []; for(let i=0;i<10;i++){ if(req.query['sort'+i]) sorts.push({col:req.query['sort'+i],dir:req.query['dir'+i]||'asc'}); }
   if(sorts.length>0){ meta.sort((a,b)=>{
@@ -365,7 +376,6 @@ app.get('/api/list-update', (req,res)=>{
     }
     return 0;
   }); }
-  
   const totalPages = Math.ceil(meta.length/limit);
   const paged = meta.slice((page-1)*limit,page*limit);
   res.json({data:paged,totalPages});

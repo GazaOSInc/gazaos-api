@@ -21,5 +21,11 @@
   "bugs": {
     "url": "https://github.com/GazaOSInc/gazaos-api/issues"
   },
-  "homepage": "https://github.com/GazaOSInc/gazaos-api#readme"
+  "homepage": "https://github.com/GazaOSInc/gazaos-api#readme",
+  "dependencies": {
+    "express": "^5.1.0",
+    "fs": "^0.0.1-security",
+    "multer": "^2.0.2",
+    "path": "^0.12.7"
+  }
 }

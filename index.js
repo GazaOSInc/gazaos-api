@@ -82,7 +82,7 @@ async function readMetadata() {
 }
 
 async function addMetadata(entry) {
-  if(metaCollection) await metaCollection.insertOne(entry);
+  if (metaCollection) await metaCollection.insertOne(entry);
 }
 
 // -------------------- JSON Backup --------------------
@@ -103,7 +103,7 @@ function escapeRegExp(string) {
 
 // -------------------- Catalog Page --------------------
 app.get('/', (req, res) => {
-  const ua = req.headers['user-agent'] || '';
+  const ua = req.headers['user-agent'];
   const isIE = ua.indexOf('MSIE') !== -1 || ua.indexOf('Trident') !== -1;
   getSessionId(req, res);
 
@@ -125,15 +125,9 @@ tr:nth-child(even){background:#fafafa;}
 tr:hover{background:#ddeeff;}
 tr.selected{background:#cce5ff !important;}
 .highlight{background-color:yellow;}
-#basketContainer{margin-top:10px;text-align:left;}
-#basketContainer img{cursor:pointer;width:32px;height:32px;vertical-align:middle;}
-#basketCount{font-weight:bold;color:#fff;margin-left:5px;}
 .pagination{margin-top:10px;text-align:center;}
 .pagination button{padding:4px 8px;margin:0 2px;border:1px solid #ccc;background:#f3f3f3;cursor:pointer;border-radius:2px;}
 .pagination button:hover, .pagination button:focus{background:#e0e0e0; outline:2px solid #0078d7;}
-#basketControls button{padding:4px 8px;margin-right:5px;border:1px solid #ccc;background:#f3f3f3;cursor:pointer;border-radius:2px;}
-#basketControls button:hover, #basketControls button:focus{background:#e0e0e0;outline:2px solid #0078d7;}
-input.filterInput{width:90%;padding:4px;margin:2px;border:1px solid #ccc;border-radius:2px;box-sizing:border-box;}
 th .resizer{position:absolute;right:0;top:0;width:5px;height:100%;cursor:col-resize;user-select:none;}
 th:focus{outline:2px solid #0078d7;}
 </style>
@@ -142,15 +136,22 @@ th:focus{outline:2px solid #0078d7;}
 <header>Microsoft Update Catalog</header>
 <div class="container">
 <div class="top-links"><a href="/upload">Upload New File</a></div>
-<div id="basketContainer">
-<img src="/images/decor_Basket.jpg" title="View Basket" onclick="viewBasket()" tabindex="0" aria-label="View Basket"/>
-<span id="basketCount" aria-live="polite">0</span>
-<button onclick="downloadBasket()" tabindex="0" aria-label="Download Basket">Download Basket</button>
-</div>
-<div id="basketControls" style="margin:10px 0;">
-<button onclick="selectAllBasket()" tabindex="0" aria-label="Select All in Basket">Select All</button>
-<button onclick="deselectAllBasket()" tabindex="0" aria-label="Deselect All">Deselect All</button>
-</div>
+<script>
+const isIE = ${isIE};
+if(isIE){
+  document.write(\`
+    <div id="basketContainer">
+      <img src="/images/decor_Basket.jpg" title="View Basket" onclick="viewBasket()" tabindex="0" aria-label="View Basket"/>
+      <span id="basketCount" aria-live="polite">0</span>
+      <button onclick="downloadBasket()" tabindex="0" aria-label="Download Basket">Download Basket</button>
+    </div>
+    <div id="basketControls" style="margin:10px 0;">
+      <button onclick="selectAllBasket()" tabindex="0" aria-label="Select All in Basket">Select All</button>
+      <button onclick="deselectAllBasket()" tabindex="0" aria-label="Deselect All">Deselect All</button>
+    </div>
+  \`);
+}
+</script>
 
 <table id="fileTable" role="grid" aria-label="Update Catalog Table" tabindex="0">
 <thead><tr role="row">
@@ -169,7 +170,6 @@ th:focus{outline:2px solid #0078d7;}
 
 <script>
 // -------------------- JS for Table, Basket, Keyboard & ARIA --------------------
-const isIE=navigator.userAgent.indexOf("MSIE")!==-1||navigator.userAgent.indexOf("Trident")!==-1;
 let currentPage=1, rowsPerPage=10;
 let sortOrders=[]; 
 let filters = {};
@@ -211,22 +211,23 @@ function highlightText(text){
 }
 
 function toggleHybridBasket(kb,checkbox){
+  if(!isIE) return; // prevent for non-IE
   if(checkbox.checked) selectedRows.add(kb); else selectedRows.delete(kb);
-  if(isIE){
-    let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
-    if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
-    else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
-    localStorage.setItem('ieBasket',basket.join(","));}
-  else { updateServerBasket(kb,checkbox.checked); }
+  let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
+  if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
+  else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
+  localStorage.setItem('ieBasket',basket.join(","));
   updateBasketCount();
   highlightRows();
 }
 
 async function updateBasketCount(){ 
+  if(!isIE) return;
   document.getElementById('basketCount').innerHTML = selectedRows.size; 
   document.getElementById('basketCount').setAttribute('aria-label','Basket contains '+selectedRows.size+' items');
 }
 function highlightRows(){
+  if(!isIE) return;
   document.querySelectorAll('#fileTable tbody tr').forEach(tr=>{
     const kb = parseInt(tr.querySelector('input[type="checkbox"]').getAttribute('data-kb'));
     if(selectedRows.has(kb)){ tr.classList.add('selected'); tr.querySelector('input[type="checkbox"]').checked=true; tr.setAttribute('aria-selected','true'); }
@@ -235,19 +236,19 @@ function highlightRows(){
 }
 
 function viewBasket(){
-  if(selectedRows.size===0){alert('Basket empty'); return;}
+  if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
   let msg = "Basket contains:\\n";
   selectedRows.forEach(kb=>{ const link=document.getElementById('kbLink'+kb); if(link) msg+=link.textContent+"\\n"; });
   alert(msg);
 }
 
 function downloadBasket(){
-  if(selectedRows.size===0){alert('Basket empty'); return;}
+  if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
   selectedRows.forEach(kb=>{ const link=document.getElementById('kbLink'+kb); if(link) window.open(link.href,'_blank'); });
 }
 
-function selectAllBasket(){ document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=true; cb.onchange(); }); }
-function deselectAllBasket(){ document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=false; cb.onchange(); }); }
+function selectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=true; cb.onchange(); }); }
+function deselectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=false; cb.onchange(); }); }
 
 async function fetchTable(){
   const params=new URLSearchParams({page:currentPage,limit:rowsPerPage});
@@ -266,7 +267,7 @@ async function fetchTable(){
     <td role="gridcell">\${highlightText(f.tag||'-')}</td>
     <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
     <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>Download</a></td>
-    <td role="gridcell"><input type="checkbox" data-kb="\${f.kb}" onchange="toggleHybridBasket(\${f.kb},this)" tabindex="0" aria-label="Add KB\${f.kb} to basket"></td>\`;
+    <td role="gridcell">\${isIE ? '<input type="checkbox" data-kb="'+f.kb+'" onchange="toggleHybridBasket('+f.kb+',this)" tabindex="0" aria-label="Add KB'+f.kb+' to basket">' : ''}</td>\`;
     tbody.appendChild(tr);
   });
   highlightRows();
@@ -289,7 +290,6 @@ function renderPagination(totalPages){
 }
 
 function addSort(col){
-  if(!col) return; // <-- FIX: prevent undefined
   const existing = sortOrders.find(o=>o.col===col);
   if(existing){ existing.dir = existing.dir==='asc'?'desc':'asc'; }
   else{ sortOrders.push({col:col,dir:'asc'}); }
@@ -302,25 +302,14 @@ function addSort(col){
 }
 
 document.querySelectorAll('th').forEach(th=>{
-  th.addEventListener('click',()=>{
-    const col = th.querySelector('input')?.dataset.col;
-    if(!col) return; // <-- FIX: prevent undefined
-    addSort(col);
-  });
-  th.addEventListener('keydown',(e)=>{
-    if(e.key==='Enter'||e.key===' '){ 
-      e.preventDefault();
-      const col = th.querySelector('input')?.dataset.col;
-      if(!col) return; // <-- FIX: prevent undefined
-      addSort(col);
-    }
-  });
+  th.addEventListener('click',()=>{ const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); });
+  th.addEventListener('keydown',(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); } });
 });
 document.querySelectorAll('.filterInput').forEach(input=>{
   input.addEventListener('input',()=>{ filters[input.dataset.col] = input.value; currentPage=1; fetchTable(); });
 });
 
-window.onload=function(){ initHybridBasket().then(()=>fetchTable()); };
+window.onload=function(){ if(isIE) initHybridBasket().then(()=>fetchTable()); else fetchTable(); };
 </script>
 </div></body></html>`;
   res.send(html);
@@ -335,76 +324,83 @@ app.get('/upload', authMiddleware, (req,res)=>{
 body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;padding:20px;background:#f4f4f4;}
 form{background:#fff;padding:20px;border:1px solid #ccc;width:400px;margin:auto;border-radius:4px;position:relative;}
 label{display:block;margin:10px 0 5px;}
-input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;box-sizing:border-box;}
-#progressBar{width:0%;height:20px;background:#0078d7;border-radius:2px;margin-bottom:10px;}
-#status{margin-top:5px;}
+input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;}
+button{background:#0078d7;color:#fff;border:none;cursor:pointer;}
+button:hover{background:#005a9e;}
+a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
+#progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
+#progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
 </style>
 </head>
 <body>
+<h1 style="text-align:center;">Upload File</h1>
 <form id="uploadForm">
-<label>File:</label><input type="file" name="file" required>
+<label for="file">Select file:</label><input type="file" id="file" name="file" required>
+<label for="description">Description:</label><input type="text" id="description" name="description">
+<label for="tag">Tag:</label><input type="text" id="tag" name="tag">
 <button type="submit">Upload</button>
-<div id="progressContainer"><div id="progressBar"></div></div>
-<div id="status"></div>
+<div id="progressContainer"><div id="progressBar">0%</div></div>
 </form>
+<a href="/">Back to Catalog</a>
 <script>
 const form=document.getElementById('uploadForm');
-form.onsubmit=function(e){
+const progressContainer=document.getElementById('progressContainer');
+const progressBar=document.getElementById('progressBar');
+form.addEventListener('submit',e=>{
   e.preventDefault();
   const file=form.file.files[0];
-  if(!file) return;
+  const desc=form.description.value;
+  const tag=form.tag.value;
+  if(!file) return alert('Select file first');
+  const formData=new FormData();
+  formData.append('file',file); formData.append('description',desc); formData.append('tag',tag);
   const xhr=new XMLHttpRequest();
-  xhr.open('POST','/api/upload');
-  xhr.upload.onprogress=function(evt){ if(evt.lengthComputable){ const pct=Math.round(evt.loaded/evt.total*100); document.getElementById('progressBar').style.width=pct+'%'; } };
-  xhr.onload=function(){ document.getElementById('status').innerText=xhr.responseText; document.getElementById('progressBar').style.width='0%'; };
-  const fd=new FormData(); fd.append('file',file); xhr.send(fd);
-};
+  xhr.open('POST','/api/upload',true);
+  xhr.upload.onprogress=e=>{ progressContainer.style.display='block'; const pct=Math.round((e.loaded/e.total)*100); progressBar.style.width=pct+'%'; progressBar.textContent=pct+'%'; };
+  xhr.onload=()=>{ if(xhr.status===200)alert('Upload complete'); else alert('Upload failed'); progressContainer.style.display='none'; progressBar.style.width='0%'; progressBar.textContent='0%'; };
+  xhr.send(formData);
+});
 </script>
-</body></html>`);
+</body>
+</html>`);
 });
 
-// -------------------- API Endpoints --------------------
+// -------------------- Upload API --------------------
 app.post('/api/upload', authMiddleware, upload.single('file'), async (req,res)=>{
-  if(!req.file) return res.status(400).send('No file uploaded');
-  const meta = { kb: Math.floor(Math.random()*1000000), name:req.file.originalname, originalFileName:req.file.originalname, description:'Uploaded file', tag:'', uploadTime:Date.now(), filePath:req.file.filename };
-  await addMetadata(meta);
-  await saveMetadataJSON(meta);
-  res.send('File uploaded successfully with KB#'+meta.kb);
+  try{
+    const meta={kb:Date.now(), name:req.file.originalname, filePath:req.file.filename, originalFileName:req.file.originalname, description:req.body.description, tag:req.body.tag, uploadTime:new Date()};
+    await addMetadata(meta); await saveMetadataJSON(meta);
+    res.json({success:true});
+  }catch(err){ console.error(err); res.status(500).json({error:err.message}); }
 });
 
+// -------------------- List Update API --------------------
 app.get('/api/list-update', async (req,res)=>{
   let data = await readMetadata();
   // Filtering
-  for(const key in req.query){ if(key.startsWith('filter_') && req.query[key]){ const col=key.replace('filter_',''); const term=req.query[key].toLowerCase(); data = data.filter(d=> (d[col]||'').toString().toLowerCase().includes(term)); } }
-  // Sorting
-  const sortCols = Object.keys(req.query).filter(k=>k.startsWith('sort'));
-  sortCols.sort(); // ensure order
-  for(const sc of sortCols){
-    const idx = sc.replace('sort','');
-    const dir = req.query['dir'+idx] || 'asc';
-    const col = req.query[sc];
-    data.sort((a,b)=>{ if(a[col]<b[col]) return dir==='asc'?-1:1; if(a[col]>b[col]) return dir==='asc'?1:-1; return 0; });
+  for(const col of ['kb','name','originalFileName','description','tag','uploadTime']){
+    if(req.query['filter_'+col]) data = data.filter(f=>String(f[col]||'').toLowerCase().includes(req.query['filter_'+col].toLowerCase()));
   }
-  const page = parseInt(req.query.page)||1;
-  const limit = parseInt(req.query.limit)||10;
-  const start = (page-1)*limit;
-  const paged = data.slice(start,start+limit);
-  const totalPages = Math.ceil(data.length/limit);
+  // Sorting
+  for(let i=0;i<10;i++){
+    const col=req.query['sort'+i]; const dir=req.query['dir'+i]; if(col && dir){ data.sort((a,b)=>{ if(a[col]<b[col]) return dir==='asc'? -1:1; if(a[col]>b[col]) return dir==='asc'? 1:-1; return 0; }); }
+  }
+  const page=parseInt(req.query.page)||1; const limit=parseInt(req.query.limit)||10;
+  const totalPages=Math.ceil(data.length/limit);
+  const paged=data.slice((page-1)*limit,page*limit);
   res.json({data:paged,totalPages});
 });
 
+// -------------------- Basket API --------------------
 app.get('/api/basket', (req,res)=>{
-  const sid = getSessionId(req,res);
-  res.json(serverBaskets[sid]);
+  const sid=getSessionId(req,res); res.json(serverBaskets[sid]||[]);
 });
-
 app.post('/api/basket', (req,res)=>{
-  const sid = getSessionId(req,res);
-  const { kb, add } = req.body;
+  const sid=getSessionId(req,res); const {kb,add}=req.body;
   if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb); }
   else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb); }
-  res.json(serverBaskets[sid]);
+  res.json({success:true});
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>console.log('Server running on port',PORT));
+app.listen(PORT,()=>console.log('Server running on port '+PORT));

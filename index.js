@@ -211,7 +211,7 @@ function highlightText(text){
 }
 
 function toggleHybridBasket(kb,checkbox){
-  if(!isIE) return; // prevent for non-IE
+  if(!isIE) return;
   if(checkbox.checked) selectedRows.add(kb); else selectedRows.delete(kb);
   let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
   if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
@@ -340,67 +340,81 @@ a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:
 <label for="tag">Tag:</label><input type="text" id="tag" name="tag">
 <button type="submit">Upload</button>
 <div id="progressContainer"><div id="progressBar">0%</div></div>
-</form>
 <a href="/">Back to Catalog</a>
+</form>
 <script>
-const form=document.getElementById('uploadForm');
-const progressContainer=document.getElementById('progressContainer');
-const progressBar=document.getElementById('progressBar');
-form.addEventListener('submit',e=>{
+document.getElementById('uploadForm').addEventListener('submit',function(e){
   e.preventDefault();
-  const file=form.file.files[0];
-  const desc=form.description.value;
-  const tag=form.tag.value;
-  if(!file) return alert('Select file first');
+  const fileInput=document.getElementById('file');
+  const descInput=document.getElementById('description');
+  const tagInput=document.getElementById('tag');
+  if(!fileInput.files.length) return alert('Select file');
   const formData=new FormData();
-  formData.append('file',file); formData.append('description',desc); formData.append('tag',tag);
+  formData.append('file',fileInput.files[0]);
+  formData.append('description',descInput.value);
+  formData.append('tag',tagInput.value);
   const xhr=new XMLHttpRequest();
   xhr.open('POST','/api/upload',true);
-  xhr.upload.onprogress=e=>{ progressContainer.style.display='block'; const pct=Math.round((e.loaded/e.total)*100); progressBar.style.width=pct+'%'; progressBar.textContent=pct+'%'; };
-  xhr.onload=()=>{ if(xhr.status===200)alert('Upload complete'); else alert('Upload failed'); progressContainer.style.display='none'; progressBar.style.width='0%'; progressBar.textContent='0%'; };
+  const progressContainer=document.getElementById('progressContainer');
+  const progressBar=document.getElementById('progressBar');
+  xhr.upload.onprogress=function(e){
+    if(e.lengthComputable){ progressContainer.style.display='block'; let percent=Math.round(e.loaded/e.total*100); progressBar.style.width=percent+'%'; progressBar.textContent=percent+'%'; }
+  };
+  xhr.onload=function(){ if(xhr.status===200){ alert('Upload successful'); fileInput.value=''; descInput.value=''; tagInput.value=''; progressBar.style.width='0%'; progressBar.textContent='0%'; progressContainer.style.display='none'; } else alert('Upload failed: '+xhr.responseText); };
   xhr.send(formData);
 });
 </script>
-</body>
-</html>`);
+</body></html>`);
 });
 
-// -------------------- Upload API --------------------
+// -------------------- API Upload --------------------
 app.post('/api/upload', authMiddleware, upload.single('file'), async (req,res)=>{
-  try{
-    const meta={kb:Date.now(), name:req.file.originalname, filePath:req.file.filename, originalFileName:req.file.originalname, description:req.body.description, tag:req.body.tag, uploadTime:new Date()};
-    await addMetadata(meta); await saveMetadataJSON(meta);
-    res.json({success:true});
-  }catch(err){ console.error(err); res.status(500).json({error:err.message}); }
+  if(!req.file) return res.status(400).send('No file uploaded');
+  const kb = parseInt(req.body.kb) || Date.now();
+  const entry = {
+    kb: kb,
+    name: req.file.filename,
+    originalFileName: req.file.originalname,
+    filePath: req.file.filename,
+    description: req.body.description||'',
+    tag: req.body.tag||'',
+    uploadTime: new Date()
+  };
+  await addMetadata(entry);
+  await saveMetadataJSON(entry);
+  res.send({status:'ok',entry});
 });
 
-// -------------------- List Update API --------------------
+// -------------------- API List --------------------
 app.get('/api/list-update', async (req,res)=>{
-  let data = await readMetadata();
-  // Filtering
-  for(const col of ['kb','name','originalFileName','description','tag','uploadTime']){
-    if(req.query['filter_'+col]) data = data.filter(f=>String(f[col]||'').toLowerCase().includes(req.query['filter_'+col].toLowerCase()));
+  const page=parseInt(req.query.page)||1;
+  const limit=parseInt(req.query.limit)||10;
+  const filtersQuery={};
+  Object.keys(req.query).forEach(k=>{
+    if(k.startsWith('filter_') && req.query[k]) filtersQuery[k.slice(7)] = new RegExp(escapeRegExp(req.query[k]),'i');
+  });
+  let cursor = metaCollection ? metaCollection.find(filtersQuery) : { skip:()=>({limit:()=>({toArray:async()=>[]})}) };
+  const sortObj={}; 
+  for(let i=0;i<10;i++){ 
+    const col=req.query['sort'+i],dir=req.query['dir'+i]; 
+    if(col) sortObj[col]=dir==='asc'?1:-1;
   }
-  // Sorting
-  for(let i=0;i<10;i++){
-    const col=req.query['sort'+i]; const dir=req.query['dir'+i]; if(col && dir){ data.sort((a,b)=>{ if(a[col]<b[col]) return dir==='asc'? -1:1; if(a[col]>b[col]) return dir==='asc'? 1:-1; return 0; }); }
-  }
-  const page=parseInt(req.query.page)||1; const limit=parseInt(req.query.limit)||10;
-  const totalPages=Math.ceil(data.length/limit);
-  const paged=data.slice((page-1)*limit,page*limit);
-  res.json({data:paged,totalPages});
+  cursor = cursor.sort(sortObj).skip((page-1)*limit).limit(limit);
+  const data = await cursor.toArray();
+  const totalCount = await (metaCollection ? metaCollection.countDocuments(filtersQuery) : 0);
+  res.json({data:data,totalPages:Math.ceil(totalCount/limit)});
 });
 
-// -------------------- Basket API --------------------
-app.get('/api/basket', (req,res)=>{
-  const sid=getSessionId(req,res); res.json(serverBaskets[sid]||[]);
-});
+// -------------------- Basket APIs --------------------
+app.get('/api/basket', (req,res)=>{ const sid=getSessionId(req,res); res.json(serverBaskets[sid]||[]); });
 app.post('/api/basket', (req,res)=>{
-  const sid=getSessionId(req,res); const {kb,add}=req.body;
+  const sid=getSessionId(req,res);
+  const {kb,add} = req.body;
+  if(!serverBaskets[sid]) serverBaskets[sid]=[];
   if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb); }
   else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb); }
-  res.json({success:true});
+  res.json({status:'ok',basket:serverBaskets[sid]});
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>console.log('Server running on port '+PORT));
+app.listen(PORT,()=>{ console.log('Server running on port',PORT); });

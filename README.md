@@ -1,4 +1,4 @@
-Tntroducing Microsoft Update Catalog based on nodejs.
+Introducing Microsoft Update Catalog based on nodejs.
 
 # How I can deploy?
 You need to a VPS, local or cloud (like Render (aka https://dashboard.render.com)) to deploy yourself.

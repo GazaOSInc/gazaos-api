@@ -10,5 +10,5 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '22'
-      - run: npm install
-      - run: npm start
+      - run: node index.js &   # Note the &
+      - run: npm test

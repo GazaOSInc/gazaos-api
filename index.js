@@ -78,11 +78,11 @@ MongoClient.connect(MONGO_URI, { useUnifiedTopology: true })
   .catch(err => console.error('MongoDB connection error:', err));
 
 async function readMetadata() {
-  return await metaCollection.find({}).toArray();
+  return metaCollection ? await metaCollection.find({}).toArray() : [];
 }
 
 async function addMetadata(entry) {
-  await metaCollection.insertOne(entry);
+  if(metaCollection) await metaCollection.insertOne(entry);
 }
 
 // -------------------- JSON Backup --------------------
@@ -103,7 +103,7 @@ function escapeRegExp(string) {
 
 // -------------------- Catalog Page --------------------
 app.get('/', (req, res) => {
-  const ua = req.headers['user-agent'];
+  const ua = req.headers['user-agent'] || '';
   const isIE = ua.indexOf('MSIE') !== -1 || ua.indexOf('Trident') !== -1;
   getSessionId(req, res);
 
@@ -149,7 +149,7 @@ th:focus{outline:2px solid #0078d7;}
 </div>
 <div id="basketControls" style="margin:10px 0;">
 <button onclick="selectAllBasket()" tabindex="0" aria-label="Select All in Basket">Select All</button>
-<button onclick="deselectAllBasket()" tabindex="0" aria-label="Deselect All in Basket">Deselect All</button>
+<button onclick="deselectAllBasket()" tabindex="0" aria-label="Deselect All">Deselect All</button>
 </div>
 
 <table id="fileTable" role="grid" aria-label="Update Catalog Table" tabindex="0">
@@ -289,6 +289,7 @@ function renderPagination(totalPages){
 }
 
 function addSort(col){
+  if(!col) return; // <-- FIX: prevent undefined
   const existing = sortOrders.find(o=>o.col===col);
   if(existing){ existing.dir = existing.dir==='asc'?'desc':'asc'; }
   else{ sortOrders.push({col:col,dir:'asc'}); }
@@ -301,8 +302,19 @@ function addSort(col){
 }
 
 document.querySelectorAll('th').forEach(th=>{
-  th.addEventListener('click',()=>{ const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); });
-  th.addEventListener('keydown',(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); } });
+  th.addEventListener('click',()=>{
+    const col = th.querySelector('input')?.dataset.col;
+    if(!col) return; // <-- FIX: prevent undefined
+    addSort(col);
+  });
+  th.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter'||e.key===' '){ 
+      e.preventDefault();
+      const col = th.querySelector('input')?.dataset.col;
+      if(!col) return; // <-- FIX: prevent undefined
+      addSort(col);
+    }
+  });
 });
 document.querySelectorAll('.filterInput').forEach(input=>{
   input.addEventListener('input',()=>{ filters[input.dataset.col] = input.value; currentPage=1; fetchTable(); });
@@ -323,120 +335,76 @@ app.get('/upload', authMiddleware, (req,res)=>{
 body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;padding:20px;background:#f4f4f4;}
 form{background:#fff;padding:20px;border:1px solid #ccc;width:400px;margin:auto;border-radius:4px;position:relative;}
 label{display:block;margin:10px 0 5px;}
-input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;}
-button{background:#0078d7;color:#fff;border:none;cursor:pointer;}
-button:hover{background:#005a9e;}
-a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
-#progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
-#progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
+input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;box-sizing:border-box;}
+#progressBar{width:0%;height:20px;background:#0078d7;border-radius:2px;margin-bottom:10px;}
+#status{margin-top:5px;}
 </style>
 </head>
 <body>
-<h1 style="text-align:center;">Upload File</h1>
-<form id="uploadForm" aria-label="Upload Form" action="/upload" method="post" enctype="multipart/form-data">
-<label for="fileInput">Select File:</label>
-<input type="file" id="fileInput" name="file" required aria-required="true">
-<label for="nameInput">Name:</label>
-<input type="text" id="nameInput" name="name" required aria-required="true">
-<label for="descInput">Description:</label>
-<input type="text" id="descInput" name="description">
-<label for="tagInput">Tag:</label>
-<input type="text" id="tagInput" name="tag">
+<form id="uploadForm">
+<label>File:</label><input type="file" name="file" required>
 <button type="submit">Upload</button>
-<div id="progressContainer"><div id="progressBar">0%</div></div>
+<div id="progressContainer"><div id="progressBar"></div></div>
+<div id="status"></div>
 </form>
-<a href="/">Back to Catalog</a>
 <script>
-const form = document.getElementById('uploadForm');
-const progressContainer = document.getElementById('progressContainer');
-const progressBar = document.getElementById('progressBar');
-
-form.addEventListener('submit', async (e)=>{
+const form=document.getElementById('uploadForm');
+form.onsubmit=function(e){
   e.preventDefault();
-  const file = document.getElementById('fileInput').files[0];
-  if(!file) return alert('Select a file.');
-  const formData = new FormData(form);
-  progressContainer.style.display='block';
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST','/upload');
-  xhr.upload.onprogress = (event)=>{
-    if(event.lengthComputable){
-      const percent = Math.round((event.loaded/event.total)*100);
-      progressBar.style.width = percent + '%';
-      progressBar.textContent = percent + '%';
-    }
-  };
-  xhr.onload = ()=>{ if(xhr.status===200){ alert('Upload success'); progressBar.style.width='0%'; progressBar.textContent='0%'; form.reset(); } else alert('Upload failed: '+xhr.responseText); };
-  xhr.send(formData);
-});
+  const file=form.file.files[0];
+  if(!file) return;
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/upload');
+  xhr.upload.onprogress=function(evt){ if(evt.lengthComputable){ const pct=Math.round(evt.loaded/evt.total*100); document.getElementById('progressBar').style.width=pct+'%'; } };
+  xhr.onload=function(){ document.getElementById('status').innerText=xhr.responseText; document.getElementById('progressBar').style.width='0%'; };
+  const fd=new FormData(); fd.append('file',file); xhr.send(fd);
+};
 </script>
-</body>
-</html>`);
+</body></html>`);
 });
 
-// -------------------- Upload POST --------------------
-app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
-  try {
-    const meta = await readMetadata();
-    const kbNumber = meta.length ? Math.max(...meta.map(m=>m.kb))+1 : 100001;
-    const newEntry = {
-      kb: kbNumber,
-      name: req.body.name,
-      originalFileName: req.file.originalname,
-      description: req.body.description||'',
-      tag: req.body.tag||'',
-      uploadTime: Date.now(),
-      filePath: req.file.filename
-    };
-    await addMetadata(newEntry);       // MongoDB
-    await saveMetadataJSON(newEntry);  // JSON backup
-    res.send('Upload successful');
-  } catch(err){ console.error(err); res.status(500).send('Upload failed'); }
+// -------------------- API Endpoints --------------------
+app.post('/api/upload', authMiddleware, upload.single('file'), async (req,res)=>{
+  if(!req.file) return res.status(400).send('No file uploaded');
+  const meta = { kb: Math.floor(Math.random()*1000000), name:req.file.originalname, originalFileName:req.file.originalname, description:'Uploaded file', tag:'', uploadTime:Date.now(), filePath:req.file.filename };
+  await addMetadata(meta);
+  await saveMetadataJSON(meta);
+  res.send('File uploaded successfully with KB#'+meta.kb);
 });
 
-// -------------------- List API --------------------
 app.get('/api/list-update', async (req,res)=>{
-  try{
-    let meta = await readMetadata();
-    Object.keys(req.query).forEach(k=>{
-      if(k.startsWith('filter_') && req.query[k]){
-        const col = k.replace('filter_','');
-        const val = req.query[k].toLowerCase();
-        meta = meta.filter(m=>String(m[col]||'').toLowerCase().includes(val));
-      }
-    });
-    const sorts=[];
-    for(let i=0;i<10;i++){
-      if(req.query['sort'+i]) sorts.push({col:req.query['sort'+i], dir:req.query['dir'+i]||'asc'});
-    }
-    if(sorts.length>0){
-      meta.sort((a,b)=>{
-        for(const s of sorts){
-          let valA=a[s.col], valB=b[s.col];
-          if(typeof valA==='string') valA=valA.toLowerCase();
-          if(typeof valB==='string') valB=valB.toLowerCase();
-          if(valA<valB) return s.dir==='asc'?-1:1;
-          if(valA>valB) return s.dir==='asc'?1:-1;
-        }
-        return 0;
-      });
-    }
-    const page=parseInt(req.query.page)||1;
-    const limit=parseInt(req.query.limit)||10;
-    const totalPages=Math.ceil(meta.length/limit);
-    const paged=meta.slice((page-1)*limit,page*limit);
-    res.json({data:paged,totalPages});
-  }catch(err){ console.error(err); res.status(500).send('Error fetching data'); }
+  let data = await readMetadata();
+  // Filtering
+  for(const key in req.query){ if(key.startsWith('filter_') && req.query[key]){ const col=key.replace('filter_',''); const term=req.query[key].toLowerCase(); data = data.filter(d=> (d[col]||'').toString().toLowerCase().includes(term)); } }
+  // Sorting
+  const sortCols = Object.keys(req.query).filter(k=>k.startsWith('sort'));
+  sortCols.sort(); // ensure order
+  for(const sc of sortCols){
+    const idx = sc.replace('sort','');
+    const dir = req.query['dir'+idx] || 'asc';
+    const col = req.query[sc];
+    data.sort((a,b)=>{ if(a[col]<b[col]) return dir==='asc'?-1:1; if(a[col]>b[col]) return dir==='asc'?1:-1; return 0; });
+  }
+  const page = parseInt(req.query.page)||1;
+  const limit = parseInt(req.query.limit)||10;
+  const start = (page-1)*limit;
+  const paged = data.slice(start,start+limit);
+  const totalPages = Math.ceil(data.length/limit);
+  res.json({data:paged,totalPages});
 });
 
-// -------------------- Basket API --------------------
-app.get('/api/basket',(req,res)=>{ const sid=getSessionId(req,res); res.json(serverBaskets[sid]); });
-app.post('/api/basket',(req,res)=>{
-  const sid=getSessionId(req,res); const {kb,add}=req.body;
+app.get('/api/basket', (req,res)=>{
+  const sid = getSessionId(req,res);
+  res.json(serverBaskets[sid]);
+});
+
+app.post('/api/basket', (req,res)=>{
+  const sid = getSessionId(req,res);
+  const { kb, add } = req.body;
   if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb); }
-  else{ serverBaskets[sid]=serverBaskets[sid].filter(x=>x!==kb); }
+  else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb); }
   res.json(serverBaskets[sid]);
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>console.log('Server running on port '+PORT));
+app.listen(PORT,()=>console.log('Server running on port',PORT));

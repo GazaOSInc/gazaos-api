@@ -28,6 +28,7 @@
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
+    "mongodb": "5.9",
     "multer": "^2.0.2",
     "path": "^0.12.7",
     "uuid": "^11.1.0"

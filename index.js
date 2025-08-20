@@ -85,6 +85,22 @@ async function addMetadata(entry) {
   await metaCollection.insertOne(entry);
 }
 
+// -------------------- JSON Backup --------------------
+const JSON_FILE = path.join(__dirname, 'metadata.json');
+async function saveMetadataJSON(entry) {
+  let data = [];
+  if (fs.existsSync(JSON_FILE)) {
+    data = JSON.parse(fs.readFileSync(JSON_FILE, 'utf8'));
+  }
+  data.push(entry);
+  fs.writeFileSync(JSON_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// -------------------- Escape RegExp --------------------
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // -------------------- Catalog Page --------------------
 app.get('/', (req, res) => {
   const ua = req.headers['user-agent'];
@@ -185,7 +201,6 @@ async function initHybridBasket(){
   mergedBasket.forEach(kb=>selectedRows.add(kb));
 }
 
-function escapeRegExp(string){ return string.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'); }
 function highlightText(text){ 
   let result = text;
   for(const col in filters){ 
@@ -201,8 +216,8 @@ function toggleHybridBasket(kb,checkbox){
     let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
     if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
     else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
-    localStorage.setItem('ieBasket',basket.join(","));
-  } else { updateServerBasket(kb,checkbox.checked); }
+    localStorage.setItem('ieBasket',basket.join(","));}
+  else { updateServerBasket(kb,checkbox.checked); }
   updateBasketCount();
   highlightRows();
 }
@@ -299,7 +314,7 @@ window.onload=function(){ initHybridBasket().then(()=>fetchTable()); };
   res.send(html);
 });
 
-// -------------------- Upload Page --------------------
+// -------------------- Upload Page (with progress bar & AJAX) --------------------
 app.get('/upload', authMiddleware, (req,res)=>{
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -311,14 +326,14 @@ label{display:block;margin:10px 0 5px;}
 input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;}
 button{background:#0078d7;color:#fff;border:none;cursor:pointer;}
 button:hover{background:#005a9e;}
-a{display:block;margin-top:10px;text-align:center;color:#0078d7;}
+a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
 #progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
 #progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
 </style>
 </head>
 <body>
 <h1 style="text-align:center;">Upload File</h1>
-<form id="uploadForm" aria-label="Upload Form">
+<form id="uploadForm" aria-label="Upload Form" action="/upload" method="post" enctype="multipart/form-data">
 <label for="fileInput">Select File:</label>
 <input type="file" id="fileInput" name="file" required aria-required="true">
 <label for="nameInput">Name:</label>
@@ -360,20 +375,21 @@ form.addEventListener('submit', async (e)=>{
 });
 
 // -------------------- Upload POST --------------------
-app.post('/upload', authMiddleware, upload.single('file'), async (req,res)=>{
-  try{
+app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
     const meta = await readMetadata();
     const kbNumber = meta.length ? Math.max(...meta.map(m=>m.kb))+1 : 100001;
     const newEntry = {
       kb: kbNumber,
       name: req.body.name,
       originalFileName: req.file.originalname,
-      description: req.body.description || '',
-      tag: req.body.tag || '',
+      description: req.body.description||'',
+      tag: req.body.tag||'',
       uploadTime: Date.now(),
       filePath: req.file.filename
     };
-    await addMetadata(newEntry);
+    await addMetadata(newEntry);       // MongoDB
+    await saveMetadataJSON(newEntry);  // JSON backup
     res.send('Upload successful');
   } catch(err){ console.error(err); res.status(500).send('Upload failed'); }
 });
@@ -382,23 +398,21 @@ app.post('/upload', authMiddleware, upload.single('file'), async (req,res)=>{
 app.get('/api/list-update', async (req,res)=>{
   try{
     let meta = await readMetadata();
-    // Filtering
     Object.keys(req.query).forEach(k=>{
       if(k.startsWith('filter_') && req.query[k]){
-        const col = k.replace('filter_',''); 
+        const col = k.replace('filter_','');
         const val = req.query[k].toLowerCase();
-        meta = meta.filter(m => String(m[col]||'').toLowerCase().includes(val));
+        meta = meta.filter(m=>String(m[col]||'').toLowerCase().includes(val));
       }
     });
-    // Sorting
     const sorts=[];
     for(let i=0;i<10;i++){
-      if(req.query['sort'+i]) sorts.push({col:req.query['sort'+i],dir:req.query['dir'+i]||'asc'});
+      if(req.query['sort'+i]) sorts.push({col:req.query['sort'+i], dir:req.query['dir'+i]||'asc'});
     }
     if(sorts.length>0){
       meta.sort((a,b)=>{
         for(const s of sorts){
-          let valA = a[s.col], valB = b[s.col];
+          let valA=a[s.col], valB=b[s.col];
           if(typeof valA==='string') valA=valA.toLowerCase();
           if(typeof valB==='string') valB=valB.toLowerCase();
           if(valA<valB) return s.dir==='asc'?-1:1;
@@ -407,12 +421,12 @@ app.get('/api/list-update', async (req,res)=>{
         return 0;
       });
     }
-    const page = parseInt(req.query.page)||1;
-    const limit = parseInt(req.query.limit)||10;
-    const totalPages = Math.ceil(meta.length/limit);
-    const paged = meta.slice((page-1)*limit,page*limit);
+    const page=parseInt(req.query.page)||1;
+    const limit=parseInt(req.query.limit)||10;
+    const totalPages=Math.ceil(meta.length/limit);
+    const paged=meta.slice((page-1)*limit,page*limit);
     res.json({data:paged,totalPages});
-  } catch(err){ console.error(err); res.status(500).send('Error fetching data'); }
+  }catch(err){ console.error(err); res.status(500).send('Error fetching data'); }
 });
 
 // -------------------- Basket API --------------------
@@ -420,7 +434,7 @@ app.get('/api/basket',(req,res)=>{ const sid=getSessionId(req,res); res.json(ser
 app.post('/api/basket',(req,res)=>{
   const sid=getSessionId(req,res); const {kb,add}=req.body;
   if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb); }
-  else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb); }
+  else{ serverBaskets[sid]=serverBaskets[sid].filter(x=>x!==kb); }
   res.json(serverBaskets[sid]);
 });
 

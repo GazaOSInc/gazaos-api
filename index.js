@@ -136,42 +136,34 @@ th:focus{outline:2px solid #0078d7;}
 <header>Microsoft Update Catalog</header>
 <div class="container">
 <div class="top-links"><a href="/upload">Upload New File</a></div>
-<script>
-const isIE = ${isIE};
-if(isIE){
-  document.write(\`
-    <div id="basketContainer">
-      <img src="/images/decor_Basket.jpg" title="View Basket" onclick="viewBasket()" tabindex="0" aria-label="View Basket"/>
-      <span id="basketCount" aria-live="polite">0</span>
-      <button onclick="downloadBasket()" tabindex="0" aria-label="Download Basket">Download Basket</button>
-    </div>
-    <div id="basketControls" style="margin:10px 0;">
-      <button onclick="selectAllBasket()" tabindex="0" aria-label="Select All in Basket">Select All</button>
-      <button onclick="deselectAllBasket()" tabindex="0" aria-label="Deselect All">Deselect All</button>
-    </div>
-  \`);
-}
-</script>
 
 <table id="fileTable" role="grid" aria-label="Update Catalog Table" tabindex="0">
-<thead><tr role="row">
-<th role="columnheader" tabindex="0" aria-sort="none">KB Number<br><input class="filterInput" data-col="kb" placeholder="Filter KB" aria-label="Filter KB"><div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">File Name<br><input class="filterInput" data-col="name" placeholder="Filter Name" aria-label="Filter Name"><div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">Original File Name<br><input class="filterInput" data-col="originalFileName" placeholder="Filter Original" aria-label="Filter Original"><div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">Description<br><input class="filterInput" data-col="description" placeholder="Filter Description" aria-label="Filter Description"><div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">Tag<br><input class="filterInput" data-col="tag" placeholder="Filter Tag" aria-label="Filter Tag"><div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">Upload Date<br><input class="filterInput" data-col="uploadTime" placeholder="Filter Date" aria-label="Filter Upload Date"><div class="resizer"></div></th>
+<thead>
+<tr role="row">
+<th role="columnheader" tabindex="0" aria-sort="none">KB Number<div class="resizer"></div></th>
+<th role="columnheader" tabindex="0" aria-sort="none">File Name<div class="resizer"></div></th>
+<th role="columnheader" tabindex="0" aria-sort="none">Original File Name<div class="resizer"></div></th>
+<th role="columnheader" tabindex="0" aria-sort="none">Description<div class="resizer"></div></th>
+<th role="columnheader" tabindex="0" aria-sort="none">Tag<div class="resizer"></div></th>
+<th role="columnheader" tabindex="0" aria-sort="none">Upload Date<div class="resizer"></div></th>
 <th role="columnheader" tabindex="0" aria-sort="none">Download<div class="resizer"></div></th>
-<th role="columnheader" tabindex="0" aria-sort="none">Basket<div class="resizer"></div></th>
-</tr></thead>
+<script>
+const ua = navigator.userAgent;
+const isIE = ua.indexOf('MSIE') !== -1 || ua.indexOf('Trident/') !== -1;
+if(isIE){
+  document.write('<th role="columnheader" tabindex="0" aria-sort="none">Basket<div class="resizer"></div></th>');
+}
+</script>
+</tr>
+</thead>
 <tbody></tbody>
 </table>
 <div class="pagination" id="pagination" role="navigation" aria-label="Pagination"></div>
 
 <script>
-// -------------------- JS for Table, Basket, Keyboard & ARIA --------------------
+// -------------------- Table & Basket JS --------------------
 let currentPage=1, rowsPerPage=10;
-let sortOrders=[]; 
+let sortOrders=[];
 let filters = {};
 let selectedRows = new Set();
 
@@ -189,25 +181,19 @@ table.querySelectorAll('th .resizer').forEach(resizer=>{
 function resizeColumn(e){ const width = startWidth + (e.pageX - startX); if(width>30) resizerTh.style.width = width + 'px'; }
 function stopResize(){ document.removeEventListener('mousemove',resizeColumn); document.removeEventListener('mouseup',stopResize); }
 
-async function fetchServerBasket(){ return fetch('/api/basket').then(r=>r.json()); }
-async function updateServerBasket(kb,add){ return fetch('/api/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kb,add})}); }
-async function initHybridBasket(){ 
+// -------------------- Basket Functions (IE-only) --------------------
+async function fetchServerBasket(){ if(!isIE) return []; return fetch('/api/basket').then(r=>r.json()); }
+async function updateServerBasket(kb,add){ if(!isIE) return; return fetch('/api/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kb,add})}); }
+
+async function initHybridBasket(){
   if(!isIE) return;
-  let localBasket=localStorage.getItem('ieBasket'); localBasket = localBasket?localBasket.split(",").map(Number):[];
+  let localBasket=localStorage.getItem('ieBasket'); 
+  localBasket = localBasket?localBasket.split(",").map(Number):[];
   const serverBasket = await fetchServerBasket();
   const mergedBasket = Array.from(new Set([...localBasket,...serverBasket]));
   localStorage.setItem('ieBasket',mergedBasket.join(","));
   for(const kb of mergedBasket) await updateServerBasket(kb,true);
   mergedBasket.forEach(kb=>selectedRows.add(kb));
-}
-
-function highlightText(text){ 
-  let result = text;
-  for(const col in filters){ 
-    const term = filters[col];
-    if(term){ const re = new RegExp(escapeRegExp(term),'gi'); result = result.replace(re,m=>'<span class="highlight">'+m+'</span>'); }
-  }
-  return result;
 }
 
 function toggleHybridBasket(kb,checkbox){
@@ -216,20 +202,20 @@ function toggleHybridBasket(kb,checkbox){
   let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
   if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
   else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
-  localStorage.setItem('ieBasket',basket.join(","));
-  updateBasketCount();
-  highlightRows();
+  localStorage.setItem('ieBasket',basket.join(",")); updateBasketCount(); highlightRows();
 }
 
 async function updateBasketCount(){ 
   if(!isIE) return;
-  document.getElementById('basketCount').innerHTML = selectedRows.size; 
-  document.getElementById('basketCount').setAttribute('aria-label','Basket contains '+selectedRows.size+' items');
+  const basketCountElem = document.getElementById('basketCount');
+  if(basketCountElem) basketCountElem.innerHTML = selectedRows.size;
+  basketCountElem?.setAttribute('aria-label','Basket contains '+selectedRows.size+' items');
 }
+
 function highlightRows(){
   if(!isIE) return;
   document.querySelectorAll('#fileTable tbody tr').forEach(tr=>{
-    const kb = parseInt(tr.querySelector('input[type="checkbox"]').getAttribute('data-kb'));
+    const kb = parseInt(tr.querySelector('input[type="checkbox"]')?.getAttribute('data-kb'));
     if(selectedRows.has(kb)){ tr.classList.add('selected'); tr.querySelector('input[type="checkbox"]').checked=true; tr.setAttribute('aria-selected','true'); }
     else{ tr.classList.remove('selected'); tr.querySelector('input[type="checkbox"]').checked=false; tr.setAttribute('aria-selected','false'); }
   });
@@ -238,17 +224,33 @@ function highlightRows(){
 function viewBasket(){
   if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
   let msg = "Basket contains:\\n";
-  selectedRows.forEach(kb=>{ const link=document.getElementById('kbLink'+kb); if(link) msg+=link.textContent+"\\n"; });
+  selectedRows.forEach(kb=>{
+    const link=document.getElementById('kbLink'+kb);
+    if(link) msg+=link.textContent+"\\n";
+  });
   alert(msg);
 }
 
 function downloadBasket(){
   if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
-  selectedRows.forEach(kb=>{ const link=document.getElementById('kbLink'+kb); if(link) window.open(link.href,'_blank'); });
+  selectedRows.forEach(kb=>{
+    const link=document.getElementById('kbLink'+kb);
+    if(link) window.open(link.href,'_blank');
+  });
 }
 
 function selectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=true; cb.onchange(); }); }
 function deselectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=false; cb.onchange(); }); }
+
+// -------------------- Fetch & Render Table --------------------
+function highlightText(text){ 
+  let result = text;
+  for(const col in filters){ 
+    const term = filters[col];
+    if(term){ const re = new RegExp(escapeRegExp(term),'gi'); result = result.replace(re,m=>'<span class="highlight">'+m+'</span>'); }
+  }
+  return result;
+}
 
 async function fetchTable(){
   const params=new URLSearchParams({page:currentPage,limit:rowsPerPage});
@@ -260,19 +262,18 @@ async function fetchTable(){
   data.data.forEach(f=>{
     const tr=document.createElement('tr'); tr.setAttribute('role','row');
     tr.innerHTML=\`
-    <td role="gridcell">\${highlightText('KB#'+f.kb)}</td>
-    <td role="gridcell">\${highlightText(f.name)}</td>
-    <td role="gridcell">\${highlightText(f.originalFileName)}</td>
-    <td role="gridcell">\${highlightText(f.description||'-')}</td>
-    <td role="gridcell">\${highlightText(f.tag||'-')}</td>
-    <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
-    <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>Download</a></td>
-    <td role="gridcell">\${isIE ? '<input type="checkbox" data-kb="'+f.kb+'" onchange="toggleHybridBasket('+f.kb+',this)" tabindex="0" aria-label="Add KB'+f.kb+' to basket">' : ''}</td>\`;
+      <td role="gridcell">\${highlightText('KB#'+f.kb)}</td>
+      <td role="gridcell">\${highlightText(f.name || '')}</td>
+      <td role="gridcell">\${highlightText(f.originalFileName || '')}</td>
+      <td role="gridcell">\${highlightText(f.description || '-')}</td>
+      <td role="gridcell">\${highlightText(f.tag || '-')}</td>
+      <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
+      <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>Download</a></td>
+      <td role="gridcell">\${isIE ? '<input type="checkbox" data-kb="'+f.kb+'" onchange="toggleHybridBasket('+f.kb+',this)" tabindex="0" aria-label="Add KB'+f.kb+' to basket">' : ''}</td>
+    \`;
     tbody.appendChild(tr);
   });
-  highlightRows();
-  updateBasketCount();
-  renderPagination(data.totalPages);
+  highlightRows(); updateBasketCount(); renderPagination(data.totalPages);
 }
 
 function renderPagination(totalPages){
@@ -312,10 +313,11 @@ document.querySelectorAll('.filterInput').forEach(input=>{
 window.onload=function(){ if(isIE) initHybridBasket().then(()=>fetchTable()); else fetchTable(); };
 </script>
 </div></body></html>`;
+
   res.send(html);
 });
 
-// -------------------- Upload Page (with progress bar & AJAX) --------------------
+// -------------------- Upload Page --------------------
 app.get('/upload', authMiddleware, (req,res)=>{
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -330,91 +332,80 @@ button:hover{background:#005a9e;}
 a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
 #progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
 #progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
-</style>
-</head>
+</style></head>
 <body>
-<h1 style="text-align:center;">Upload File</h1>
 <form id="uploadForm">
-<label for="file">Select file:</label><input type="file" id="file" name="file" required>
-<label for="description">Description:</label><input type="text" id="description" name="description">
-<label for="tag">Tag:</label><input type="text" id="tag" name="tag">
+<label for="kb">KB Number</label><input type="number" name="kb" id="kb" required>
+<label for="file">Select File</label><input type="file" name="file" id="file" required>
+<label for="description">Description</label><input type="text" name="description" id="description">
+<label for="tag">Tag</label><input type="text" name="tag" id="tag">
 <button type="submit">Upload</button>
 <div id="progressContainer"><div id="progressBar">0%</div></div>
 <a href="/">Back to Catalog</a>
 </form>
 <script>
-document.getElementById('uploadForm').addEventListener('submit',function(e){
+document.getElementById('uploadForm').addEventListener('submit',async function(e){
   e.preventDefault();
-  const fileInput=document.getElementById('file');
-  const descInput=document.getElementById('description');
-  const tagInput=document.getElementById('tag');
-  if(!fileInput.files.length) return alert('Select file');
+  const kb=document.getElementById('kb').value;
+  const file=document.getElementById('file').files[0];
+  const description=document.getElementById('description').value;
+  const tag=document.getElementById('tag').value;
+  if(!file) return alert('Select file');
   const formData=new FormData();
-  formData.append('file',fileInput.files[0]);
-  formData.append('description',descInput.value);
-  formData.append('tag',tagInput.value);
+  formData.append('kb',kb); formData.append('file',file); formData.append('description',description); formData.append('tag',tag);
+
   const xhr=new XMLHttpRequest();
-  xhr.open('POST','/api/upload',true);
-  const progressContainer=document.getElementById('progressContainer');
-  const progressBar=document.getElementById('progressBar');
-  xhr.upload.onprogress=function(e){
-    if(e.lengthComputable){ progressContainer.style.display='block'; let percent=Math.round(e.loaded/e.total*100); progressBar.style.width=percent+'%'; progressBar.textContent=percent+'%'; }
+  xhr.open('POST','/upload',true);
+  xhr.upload.onprogress=function(e){ 
+    if(e.lengthComputable){ 
+      const percent=Math.round((e.loaded/e.total)*100);
+      document.getElementById('progressContainer').style.display='block';
+      document.getElementById('progressBar').style.width=percent+'%';
+      document.getElementById('progressBar').textContent=percent+'%';
+    }
   };
-  xhr.onload=function(){ if(xhr.status===200){ alert('Upload successful'); fileInput.value=''; descInput.value=''; tagInput.value=''; progressBar.style.width='0%'; progressBar.textContent='0%'; progressContainer.style.display='none'; } else alert('Upload failed: '+xhr.responseText); };
+  xhr.onload=function(){ if(xhr.status===200){ alert('Uploaded'); window.location='/'; } else alert('Error:'+xhr.responseText); };
   xhr.send(formData);
 });
 </script>
 </body></html>`);
 });
 
-// -------------------- API Upload --------------------
-app.post('/api/upload', authMiddleware, upload.single('file'), async (req,res)=>{
-  if(!req.file) return res.status(400).send('No file uploaded');
-  const kb = parseInt(req.body.kb) || Date.now();
-  const entry = {
-    kb: kb,
-    name: req.file.filename,
-    originalFileName: req.file.originalname,
-    filePath: req.file.filename,
-    description: req.body.description||'',
-    tag: req.body.tag||'',
-    uploadTime: new Date()
-  };
-  await addMetadata(entry);
-  await saveMetadataJSON(entry);
-  res.send({status:'ok',entry});
-});
-
-// -------------------- API List --------------------
+// -------------------- API Endpoints --------------------
 app.get('/api/list-update', async (req,res)=>{
-  const page=parseInt(req.query.page)||1;
-  const limit=parseInt(req.query.limit)||10;
-  const filtersQuery={};
-  Object.keys(req.query).forEach(k=>{
-    if(k.startsWith('filter_') && req.query[k]) filtersQuery[k.slice(7)] = new RegExp(escapeRegExp(req.query[k]),'i');
-  });
-  let cursor = metaCollection ? metaCollection.find(filtersQuery) : { skip:()=>({limit:()=>({toArray:async()=>[]})}) };
-  const sortObj={}; 
-  for(let i=0;i<10;i++){ 
-    const col=req.query['sort'+i],dir=req.query['dir'+i]; 
-    if(col) sortObj[col]=dir==='asc'?1:-1;
-  }
-  cursor = cursor.sort(sortObj).skip((page-1)*limit).limit(limit);
-  const data = await cursor.toArray();
-  const totalCount = await (metaCollection ? metaCollection.countDocuments(filtersQuery) : 0);
-  res.json({data:data,totalPages:Math.ceil(totalCount/limit)});
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const sort = {}; // implement sorting if needed
+  const filter = {}; // implement filtering if needed
+  const metadata = await readMetadata();
+  const totalPages = Math.ceil(metadata.length/limit);
+  const start = (page-1)*limit;
+  const end = start+limit;
+  res.json({data:metadata.slice(start,end),totalPages});
 });
 
-// -------------------- Basket APIs --------------------
-app.get('/api/basket', (req,res)=>{ const sid=getSessionId(req,res); res.json(serverBaskets[sid]||[]); });
+app.get('/api/basket', (req,res)=>{ 
+  const sid = getSessionId(req,res); 
+  res.json(serverBaskets[sid] || []); 
+});
 app.post('/api/basket', (req,res)=>{
-  const sid=getSessionId(req,res);
-  const {kb,add} = req.body;
-  if(!serverBaskets[sid]) serverBaskets[sid]=[];
-  if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb); }
-  else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb); }
-  res.json({status:'ok',basket:serverBaskets[sid]});
+  const sid = getSessionId(req,res);
+  if(!serverBaskets[sid]) serverBaskets[sid] = [];
+  const { kb, add } = req.body;
+  if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb);}
+  else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb);}
+  res.json({status:'ok'});
+});
+
+// -------------------- Upload POST --------------------
+app.post('/upload', authMiddleware, upload.single('file'), async (req,res)=>{
+  const { kb, description, tag } = req.body;
+  const filePath = req.file.filename;
+  const metadataEntry = { kb: parseInt(kb), name:req.file.originalname, originalFileName:req.file.originalname, description, tag, uploadTime: new Date(), filePath };
+  await addMetadata(metadataEntry);
+  await saveMetadataJSON(metadataEntry);
+  res.send('Uploaded');
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>{ console.log('Server running on port',PORT); });
+app.listen(PORT,()=>console.log(`Server running on http://localhost:${PORT}`));

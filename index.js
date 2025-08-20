@@ -51,7 +51,6 @@ function authMiddleware(req, res, next) {
     res.setHeader('WWW-Authenticate', 'Basic realm="Upload Area"');
     return res.status(401).send('Authentication required.');
   }
-
   const base64Credentials = authHeader.split(' ')[1];
   const credentials = Buffer.from(base64Credentials, 'base64').toString('ascii');
   const [username, password] = credentials.split(':');
@@ -65,7 +64,7 @@ function authMiddleware(req, res, next) {
 }
 
 // -------------------- MongoDB Setup --------------------
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
+const MONGO_URI = process.env.MONGO_URI || '';
 const MONGO_DB = process.env.MONGO_DB || 'update_catalog';
 let db, metaCollection;
 
@@ -114,7 +113,7 @@ app.get('/', (req, res) => {
 <title>Update Catalog</title>
 <style>
 body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;background:#f4f4f4;margin:0;padding:0;}
-header{background:#0078d7;color:#fff;padding:10px 20px;font-size:22px;font-weight:bold;}
+header{background:#0078d7;color:#fff;padding:10px 20px;font-size:22px;font-weight:bold;display:flex;justify-content:space-between;align-items:center;}
 .container{padding:20px;overflow-x:auto;}
 .top-links{margin-bottom:15px;}
 a{text-decoration:none;color:#0078d7;}a:hover{text-decoration:underline;}
@@ -130,10 +129,18 @@ tr.selected{background:#cce5ff !important;}
 .pagination button:hover, .pagination button:focus{background:#e0e0e0; outline:2px solid #0078d7;}
 th .resizer{position:absolute;right:0;top:0;width:5px;height:100%;cursor:col-resize;user-select:none;}
 th:focus{outline:2px solid #0078d7;}
+#basketIcon{font-size:18px;margin-left:10px;cursor:pointer;}
+#basketIcon span{background:red;color:white;border-radius:50%;padding:2px 6px;margin-left:5px;}
 </style>
 </head>
 <body>
-<header>Microsoft Update Catalog</header>
+<header>
+<span>Microsoft Update Catalog</span>
+<span id="ieBasketHeader" style="${!isIE?'display:none':''}">🧺 Basket: <span id="basketCount">0</span> 
+<button onclick="downloadBasketClient()" title="Download selected updates">⬇️</button>
+<button onclick="viewBasket()" title="View basket contents">👁️</button>
+</span>
+</header>
 <div class="container">
 <div class="top-links"><a href="/upload">Upload New File</a></div>
 
@@ -160,6 +167,7 @@ if(isIE){
 </table>
 <div class="pagination" id="pagination" role="navigation" aria-label="Pagination"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 // -------------------- Table & Basket JS --------------------
 let currentPage=1, rowsPerPage=10;
@@ -215,9 +223,10 @@ async function updateBasketCount(){
 function highlightRows(){
   if(!isIE) return;
   document.querySelectorAll('#fileTable tbody tr').forEach(tr=>{
-    const kb = parseInt(tr.querySelector('input[type="checkbox"]')?.getAttribute('data-kb'));
-    if(selectedRows.has(kb)){ tr.classList.add('selected'); tr.querySelector('input[type="checkbox"]').checked=true; tr.setAttribute('aria-selected','true'); }
-    else{ tr.classList.remove('selected'); tr.querySelector('input[type="checkbox"]').checked=false; tr.setAttribute('aria-selected','false'); }
+    const cb = tr.querySelector('input[type="checkbox"]');
+    const kb = parseInt(cb?.getAttribute('data-kb'));
+    if(selectedRows.has(kb)){ tr.classList.add('selected'); cb.checked=true; tr.setAttribute('aria-selected','true'); }
+    else{ tr.classList.remove('selected'); cb.checked=false; tr.setAttribute('aria-selected','false'); }
   });
 }
 
@@ -231,11 +240,25 @@ function viewBasket(){
   alert(msg);
 }
 
-function downloadBasket(){
-  if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
+// -------------------- Download basket client-side (IE-only) --------------------
+async function downloadBasketClient(){
+  if(!isIE || selectedRows.size===0){ alert('Basket empty'); return; }
+  const zip = new JSZip();
+  const promises = [];
   selectedRows.forEach(kb=>{
     const link=document.getElementById('kbLink'+kb);
-    if(link) window.open(link.href,'_blank');
+    if(link){
+      const url = link.href;
+      promises.push(fetch(url).then(r=>r.blob()).then(blob=>zip.file(link.textContent,blob)));
+    }
+  });
+  Promise.all(promises).then(()=>{
+    zip.generateAsync({type:'blob'}).then(content=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(content);
+      a.download='basket.zip';
+      a.click();
+    });
   });
 }
 
@@ -254,8 +277,6 @@ function highlightText(text){
 
 async function fetchTable(){
   const params=new URLSearchParams({page:currentPage,limit:rowsPerPage});
-  for(let i=0;i<sortOrders.length;i++){ params.append('sort'+i,sortOrders[i].col); params.append('dir'+i,sortOrders[i].dir); }
-  for(const col in filters){ params.append('filter_'+col,filters[col]||''); }
   const res=await fetch('/api/list-update?'+params); 
   const data=await res.json();
   const tbody=document.querySelector('#fileTable tbody'); tbody.innerHTML='';
@@ -268,7 +289,7 @@ async function fetchTable(){
       <td role="gridcell">\${highlightText(f.description || '-')}</td>
       <td role="gridcell">\${highlightText(f.tag || '-')}</td>
       <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
-      <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>Download</a></td>
+      <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>\${f.name}</a></td>
       <td role="gridcell">\${isIE ? '<input type="checkbox" data-kb="'+f.kb+'" onchange="toggleHybridBasket('+f.kb+',this)" tabindex="0" aria-label="Add KB'+f.kb+' to basket">' : ''}</td>
     \`;
     tbody.appendChild(tr);
@@ -289,26 +310,6 @@ function renderPagination(totalPages){
     container.appendChild(btn);
   }
 }
-
-function addSort(col){
-  const existing = sortOrders.find(o=>o.col===col);
-  if(existing){ existing.dir = existing.dir==='asc'?'desc':'asc'; }
-  else{ sortOrders.push({col:col,dir:'asc'}); }
-  document.querySelectorAll('th').forEach(th=>{
-    const input = th.querySelector('input'); 
-    if(input?.dataset.col===col){ th.setAttribute('aria-sort',existing?existing.dir:'asc'); } 
-    else{ th.setAttribute('aria-sort','none'); }
-  });
-  fetchTable();
-}
-
-document.querySelectorAll('th').forEach(th=>{
-  th.addEventListener('click',()=>{ const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); });
-  th.addEventListener('keydown',(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); const col = th.querySelector('input')?.dataset.col; if(col) addSort(col); } });
-});
-document.querySelectorAll('.filterInput').forEach(input=>{
-  input.addEventListener('input',()=>{ filters[input.dataset.col] = input.value; currentPage=1; fetchTable(); });
-});
 
 window.onload=function(){ if(isIE) initHybridBasket().then(()=>fetchTable()); else fetchTable(); };
 </script>
@@ -358,54 +359,95 @@ document.getElementById('uploadForm').addEventListener('submit',async function(e
   xhr.open('POST','/upload',true);
   xhr.upload.onprogress=function(e){ 
     if(e.lengthComputable){ 
-      const percent=Math.round((e.loaded/e.total)*100);
       document.getElementById('progressContainer').style.display='block';
-      document.getElementById('progressBar').style.width=percent+'%';
-      document.getElementById('progressBar').textContent=percent+'%';
+      let percent=Math.round(e.loaded/e.total*100); 
+      document.getElementById('progressBar').style.width=percent+'%'; 
+      document.getElementById('progressBar').textContent=percent+'%'; 
     }
   };
-  xhr.onload=function(){ if(xhr.status===200){ alert('Uploaded'); window.location='/'; } else alert('Error:'+xhr.responseText); };
+  xhr.onload=function(){ alert(xhr.responseText); if(xhr.status===200) location.href='/'; };
   xhr.send(formData);
 });
 </script>
 </body></html>`);
 });
 
-// -------------------- API Endpoints --------------------
-app.get('/api/list-update', async (req,res)=>{
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const sort = {}; // implement sorting if needed
-  const filter = {}; // implement filtering if needed
-  const metadata = await readMetadata();
-  const totalPages = Math.ceil(metadata.length/limit);
-  const start = (page-1)*limit;
-  const end = start+limit;
-  res.json({data:metadata.slice(start,end),totalPages});
+// -------------------- Upload POST with Deny List --------------------
+app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
+    const { kb, description, tag } = req.body;
+    const file = req.file;
+    if (!file) return res.status(400).send('No file uploaded');
+
+    const denyExtensions = [
+      '.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.ico',
+      '.mp4','.mp3','.avi','.mkv','.mov','.wav','.flac',
+      '.doc','.docx','.xls','.xlsx','.ppt','.pptx','.pdf','.txt',
+      '.js','.ts','.py','.c','.cpp','.cs','.java','.rb','.sh','.bat','.ps1',
+      '.json','.lock','.env','.yml','.yaml'
+    ];
+
+    const denyMimeTypes = [
+      'image/jpeg','image/png','image/gif','image/webp','image/bmp','image/tiff','image/x-icon',
+      'video/mp4','video/avi','video/x-matroska','video/quicktime',
+      'audio/mpeg','audio/mp3','audio/wav','audio/flac',
+      'application/pdf','application/msword','application/vnd.ms-excel',
+      'application/vnd.ms-powerpoint','text/plain','application/json',
+      'application/x-msdownload','application/javascript','text/x-python'
+    ];
+
+    const fileExt = path.extname(file.originalname).toLowerCase();
+    const mimeType = file.mimetype;
+
+    if (denyExtensions.includes(fileExt) || denyMimeTypes.includes(mimeType)) {
+      fs.unlinkSync(file.path);
+      return res.status(403).send('Upload denied: file type not allowed.');
+    }
+
+    const metadataEntry = {
+      kb: parseInt(kb),
+      name: file.originalname,
+      originalFileName: file.originalname,
+      description,
+      tag,
+      uploadTime: new Date(),
+      filePath: file.filename
+    };
+
+    await addMetadata(metadataEntry);
+    await saveMetadataJSON(metadataEntry);
+
+    res.send('Uploaded successfully');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
 });
 
-app.get('/api/basket', (req,res)=>{ 
-  const sid = getSessionId(req,res); 
-  res.json(serverBaskets[sid] || []); 
+// -------------------- API: List Updates --------------------
+app.get('/api/list-update', async (req,res)=>{
+  const page=parseInt(req.query.page)||1;
+  const limit=parseInt(req.query.limit)||10;
+  const allData=await readMetadata();
+  const totalPages=Math.ceil(allData.length/limit);
+  const data=allData.slice((page-1)*limit,page*limit);
+  res.json({data,totalPages});
 });
+
+// -------------------- API: Basket (IE-only) --------------------
+app.get('/api/basket', (req,res)=>{
+  const sid = getSessionId(req,res);
+  res.json(serverBaskets[sid] || []);
+});
+
 app.post('/api/basket', (req,res)=>{
   const sid = getSessionId(req,res);
-  if(!serverBaskets[sid]) serverBaskets[sid] = [];
   const { kb, add } = req.body;
-  if(add){ if(!serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb);}
-  else{ serverBaskets[sid] = serverBaskets[sid].filter(x=>x!==kb);}
-  res.json({status:'ok'});
-});
-
-// -------------------- Upload POST --------------------
-app.post('/upload', authMiddleware, upload.single('file'), async (req,res)=>{
-  const { kb, description, tag } = req.body;
-  const filePath = req.file.filename;
-  const metadataEntry = { kb: parseInt(kb), name:req.file.originalname, originalFileName:req.file.originalname, description, tag, uploadTime: new Date(), filePath };
-  await addMetadata(metadataEntry);
-  await saveMetadataJSON(metadataEntry);
-  res.send('Uploaded');
+  if (!serverBaskets[sid]) serverBaskets[sid] = [];
+  if (add && !serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb);
+  if (!add) serverBaskets[sid] = serverBaskets[sid].filter(k=>k!==kb);
+  res.json({basket:serverBaskets[sid]});
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT,()=>console.log(`Catalog server running on port ${PORT}`));

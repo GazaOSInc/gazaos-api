@@ -64,7 +64,7 @@ function authMiddleware(req, res, next) {
 }
 
 // -------------------- MongoDB Setup --------------------
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://catalog:catalog2@cluster0.wrnofgi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://test:test@test.test.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 const MONGO_DB = process.env.MONGO_DB || 'update_catalog';
 let db, metaCollection, basketCollection;
 

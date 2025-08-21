@@ -9,7 +9,7 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const { v4: uuidv4 } = require('uuid');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient } = require('mongodb');
 const http = require('http');
 const { Server } = require('socket.io');
 
@@ -139,6 +139,8 @@ th .resizer{position:absolute;right:0;top:0;width:5px;height:100%;cursor:col-res
 th:focus{outline:2px solid #0078d7;}
 #basketIcon{font-size:18px;margin-left:10px;cursor:pointer;}
 #basketIcon span{background:red;color:white;border-radius:50%;padding:2px 6px;margin-left:5px;}
+.progress-container{margin-top:10px;width:100%;background:#f3f3f3;border:1px solid #ccc;height:20px;border-radius:4px;display:none;}
+.progress-bar{height:100%;width:0%;background:#0078d7;text-align:center;color:white;line-height:20px;font-size:12px;border-radius:4px;}
 </style>
 </head>
 <body>
@@ -182,9 +184,10 @@ const socket = io();
 let currentPage=1, rowsPerPage=10;
 let filters = {};
 let selectedRows = new Set();
-
 const table = document.getElementById('fileTable');
 let startX, startWidth, resizerTh;
+
+// Column resize
 table.querySelectorAll('th .resizer').forEach(resizer=>{
   resizer.addEventListener('mousedown',function(e){
     resizerTh = e.target.parentElement;
@@ -197,44 +200,58 @@ table.querySelectorAll('th .resizer').forEach(resizer=>{
 function resizeColumn(e){ const width = startWidth + (e.pageX - startX); if(width>30) resizerTh.style.width = width + 'px'; }
 function stopResize(){ document.removeEventListener('mousemove',resizeColumn); document.removeEventListener('mouseup',stopResize); }
 
-// -------------------- Basket Functions --------------------
+// -------------------- Basket Functions (IE only) --------------------
 async function fetchServerBasket(){ return fetch('/api/basket').then(r=>r.json()); }
 async function updateServerBasket(kb,add){ return fetch('/api/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kb,add})}); }
 
 async function initHybridBasket(){
+  if(!isIE) return;
+  const sid = document.cookie.match(/sid=([^;]+)/)?.[1];
   let localBasket = localStorage.getItem('ieBasket'); 
   localBasket = localBasket?localBasket.split(",").map(Number):[];
   const serverBasket = await fetchServerBasket();
   const mergedBasket = Array.from(new Set([...localBasket,...serverBasket]));
   localStorage.setItem('ieBasket',mergedBasket.join(","));
   for(const kb of mergedBasket) await updateServerBasket(kb,true);
-  mergedBasket.forEach(kb=>selectedRows.add(kb));
+  selectedRows = new Set(mergedBasket);
   updateBasketCount();
 }
 
 function toggleHybridBasket(kb,checkbox){
+  if(!isIE) return;
   if(checkbox.checked) selectedRows.add(kb); else selectedRows.delete(kb);
   let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
   if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
   else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
   localStorage.setItem('ieBasket',basket.join(","));
-  updateBasketCount(); highlightRows();
-  socket.emit('basketUpdate', Array.from(selectedRows)); // real-time
+  updateBasketCount(); 
+  highlightRowsBatch();
+  socket.emit('basketUpdate', Array.from(selectedRows));
 }
 
 function updateBasketCount(){ 
   const basketCountElem = document.getElementById('basketCount');
   if (basketCountElem) basketCountElem.innerHTML = selectedRows.size;
-  basketCountElem?.setAttribute('aria-label','Basket contains '+selectedRows.size+' items');
 }
 
-function highlightRows(){
-  document.querySelectorAll('#fileTable tbody tr').forEach(tr=>{
-    const cb = tr.querySelector('input[type="checkbox"]');
-    const kb = parseInt(cb?.getAttribute('data-kb'));
-    if(selectedRows.has(kb)){ tr.classList.add('selected'); cb.checked=true; tr.setAttribute('aria-selected','true'); }
-    else{ tr.classList.remove('selected'); cb.checked=false; tr.setAttribute('aria-selected','false'); }
-  });
+// -------------------- Batch Highlighting for IE --------------------
+function highlightRowsBatch(){
+  const trs = Array.from(document.querySelectorAll('#fileTable tbody tr'));
+  const batchSize = 50;
+  let i=0;
+  function processBatch(){
+    const end = Math.min(i+batchSize, trs.length);
+    for(let j=i;j<end;j++){
+      const tr = trs[j];
+      const cb = tr.querySelector('input[type="checkbox"]');
+      const kb = parseInt(cb?.getAttribute('data-kb'));
+      if(isIE && selectedRows.has(kb)){ tr.classList.add('selected'); cb.checked=true; tr.setAttribute('aria-selected','true'); }
+      else{ tr.classList.remove('selected'); if(cb) cb.checked=false; tr.setAttribute('aria-selected','false'); }
+    }
+    i = end;
+    if(i<trs.length) requestAnimationFrame(processBatch);
+  }
+  requestAnimationFrame(processBatch);
 }
 
 function viewBasket(){
@@ -270,12 +287,14 @@ async function downloadBasketClient(){
 
 // -------------------- Real-time Basket Updates --------------------
 socket.on('basketUpdate', (basketArray) => {
+  if(!isIE) return;
   selectedRows = new Set(basketArray);
   localStorage.setItem('ieBasket', Array.from(selectedRows).join(","));
-  highlightRows();
+  highlightRowsBatch();
   updateBasketCount();
 });
 
+// -------------------- Table Fetching with Batch Rendering --------------------
 function highlightText(text){ 
   let result = text;
   for(const col in filters){ 
@@ -290,21 +309,36 @@ async function fetchTable(){
   const res=await fetch('/api/list-update?'+params); 
   const data=await res.json();
   const tbody=document.querySelector('#fileTable tbody'); tbody.innerHTML='';
-  data.data.forEach(f=>{
-    const tr=document.createElement('tr'); tr.setAttribute('role','row');
-    tr.innerHTML=\`
-      <td role="gridcell">\${highlightText('KB#'+f.kb)}</td>
-      <td role="gridcell">\${highlightText(f.name || '')}</td>
-      <td role="gridcell">\${highlightText(f.originalFileName || '')}</td>
-      <td role="gridcell">\${highlightText(f.description || '-')}</td>
-      <td role="gridcell">\${highlightText(f.tag || '-')}</td>
-      <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
-      <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>\${f.name}</a></td>
-      <td role="gridcell"><input type="checkbox" data-kb="\${f.kb}" onchange="toggleHybridBasket(\${f.kb},this)" tabindex="0" aria-label="Add KB\${f.kb} to basket"></td>
-    \`;
-    tbody.appendChild(tr);
-  });
-  highlightRows(); updateBasketCount();
+  
+  const batchSize = 50;
+  let i=0;
+  function renderBatch(){
+    const end = Math.min(i+batchSize,data.data.length);
+    for(let j=i;j<end;j++){
+      const f = data.data[j];
+      const tr=document.createElement('tr'); tr.setAttribute('role','row');
+      const checkboxHTML = isIE
+        ? '<input type="checkbox" data-kb="' + f.kb + '" onchange="toggleHybridBasket(\\'' + f.kb + '\\', this)" tabindex="0" aria-label="Add KB' + f.kb + ' to basket">'
+        : '';
+      tr.innerHTML=\`
+        <td role="gridcell">\${highlightText('KB#'+f.kb)}</td>
+        <td role="gridcell">\${highlightText(f.name || '')}</td>
+        <td role="gridcell">\${highlightText(f.originalFileName || '')}</td>
+        <td role="gridcell">\${highlightText(f.description || '-')}</td>
+        <td role="gridcell">\${highlightText(f.tag || '-')}</td>
+        <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
+        <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>\${f.name}</a></td>
+        <td role="gridcell">\${checkboxHTML}</td>
+      \`;
+      tbody.appendChild(tr);
+    }
+    i=end;
+    if(i<data.data.length) requestAnimationFrame(renderBatch);
+    else highlightRowsBatch(); // highlight after all rendered
+  }
+  requestAnimationFrame(renderBatch);
+  
+  renderPagination(data.totalPages);
 }
 
 function renderPagination(totalPages){
@@ -329,20 +363,56 @@ window.onload=function(){ initHybridBasket().then(()=>fetchTable()); };
 
 // -------------------- Upload Page --------------------
 app.get('/upload', authMiddleware, (req,res)=>{
-  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Upload File</title></head><body>
-<form id="uploadForm" enctype="multipart/form-data">
-<label>KB Number<input type="number" name="kb" required></label>
-<label>File<input type="file" name="file" required></label>
-<label>Description<input type="text" name="description"></label>
-<label>Tag<input type="text" name="tag"></label>
-<button type="submit">Upload</button></form>
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Upload File</title>
+<style>
+body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;padding:20px;background:#f4f4f4;}
+form{background:#fff;padding:20px;border:1px solid #ccc;width:400px;margin:auto;border-radius:4px;position:relative;}
+label{display:block;margin:10px 0 5px;}
+input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;}
+button{background:#0078d7;color:#fff;border:none;cursor:pointer;}
+button:hover{background:#005a9e;}
+a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
+#progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
+#progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
+</style></head>
+<body>
+<form id="uploadForm">
+<label for="kb">KB Number</label><input type="number" name="kb" id="kb" required>
+<label for="file">Select File</label><input type="file" name="file" id="file" required>
+<label for="description">Description</label><input type="text" name="description" id="description">
+<label for="tag">Tag</label><input type="text" name="tag" id="tag">
+<button type="submit">Upload</button>
+<div id="progressContainer"><div id="progressBar">0%</div></div>
+<a href="/">Back to Catalog</a>
+</form>
 <script>
-document.getElementById('uploadForm').addEventListener('submit',function(e){
-e.preventDefault();
-const fd=new FormData(this);
-fetch('/upload',{method:'POST',body:fd}).then(r=>r.text()).then(alert);
+document.getElementById('uploadForm').addEventListener('submit',async function(e){
+  e.preventDefault();
+  const kb=document.getElementById('kb').value;
+  const file=document.getElementById('file').files[0];
+  const description=document.getElementById('description').value;
+  const tag=document.getElementById('tag').value;
+  if(!file) return alert('Select file');
+  const formData=new FormData();
+  formData.append('kb',kb); formData.append('file',file); formData.append('description',description); formData.append('tag',tag);
+
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/upload',true);
+  xhr.upload.onprogress=function(e){ 
+    if(e.lengthComputable){ 
+      document.getElementById('progressContainer').style.display='block';
+      let percent=Math.round(e.loaded/e.total*100); 
+      document.getElementById('progressBar').style.width=percent+'%'; 
+      document.getElementById('progressBar').textContent=percent+'%'; 
+    }
+  };
+  xhr.onload=function(){ alert(xhr.responseText); if(xhr.status===200) location.href='/'; };
+  xhr.send(formData);
 });
-</script></body></html>`);
+</script>
+</body></html>`);
 });
 
 // -------------------- Upload POST with Deny List --------------------
@@ -359,22 +429,19 @@ app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
       '.js','.ts','.py','.c','.cpp','.cs','.java','.rb','.sh','.bat','.ps1',
       '.json','.lock','.env','.yml','.yaml'
     ];
-
     const denyMimeTypes = [
       'image/jpeg','image/png','image/gif','image/webp','image/bmp','image/tiff','image/x-icon',
-      'video/mp4','video/avi','video/x-matroska','video/quicktime',
-      'audio/mpeg','audio/mp3','audio/wav','audio/flac',
-      'application/pdf','application/msword','application/vnd.ms-excel',
-      'application/vnd.ms-powerpoint','text/plain','application/json',
-      'application/x-msdownload','application/javascript','text/x-python'
+      'audio/mpeg','audio/wav','audio/flac','video/mp4','video/x-msvideo','video/x-matroska',
+      'application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/pdf','text/plain','application/javascript','application/json'
     ];
 
     const fileExt = path.extname(file.originalname).toLowerCase();
-    const mimeType = file.mimetype;
-
-    if (denyExtensions.includes(fileExt) || denyMimeTypes.includes(mimeType)) {
+    if (denyExtensions.includes(fileExt) || denyMimeTypes.includes(file.mimetype)) {
       fs.unlinkSync(file.path);
-      return res.status(403).send('Upload denied: file type not allowed.');
+      return res.status(400).send('File type not allowed');
     }
 
     const metadataEntry = {
@@ -418,7 +485,6 @@ app.post('/api/basket', async (req,res)=>{
   if (add && !serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb);
   if (!add) serverBaskets[sid] = serverBaskets[sid].filter(k=>k!==kb);
 
-  // Persist to MongoDB automatically
   if (basketCollection) {
     await basketCollection.updateOne(
       { sid },
@@ -427,9 +493,7 @@ app.post('/api/basket', async (req,res)=>{
     );
   }
 
-  // Notify all sockets about updated basket for this session
   io.emit('basketUpdate', serverBaskets[sid]);
-
   res.json({basket: serverBaskets[sid]});
 });
 
@@ -438,7 +502,6 @@ io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
 
   socket.on('basketUpdate', (basketArray) => {
-    // Broadcast to all other clients
     socket.broadcast.emit('basketUpdate', basketArray);
   });
 

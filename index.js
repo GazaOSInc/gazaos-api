@@ -9,10 +9,15 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const { v4: uuidv4 } = require('uuid');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
+const http = require('http');
+const { Server } = require('socket.io');
 
 // -------------------- App and Config --------------------
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
 const PORT = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
@@ -33,11 +38,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const serverBaskets = {};
 function getSessionId(req, res) {
   let sid = req.cookies['sid'];
   if (!sid) { sid = uuidv4(); res.cookie('sid', sid); }
-  if (!serverBaskets[sid]) serverBaskets[sid] = [];
   return sid;
 }
 
@@ -55,27 +58,35 @@ function authMiddleware(req, res, next) {
   const credentials = Buffer.from(base64Credentials, 'base64').toString('ascii');
   const [username, password] = credentials.split(':');
 
-  if (username === UPLOAD_USER && password === UPLOAD_PASS) {
-    return next();
-  } else {
-    res.setHeader('WWW-Authenticate', 'Basic realm="Upload Area"');
-    return res.status(401).send('Invalid credentials.');
-  }
+  if (username === UPLOAD_USER && password === UPLOAD_PASS) return next();
+  res.setHeader('WWW-Authenticate', 'Basic realm="Upload Area"');
+  return res.status(401).send('Invalid credentials.');
 }
 
 // -------------------- MongoDB Setup --------------------
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://test:test@test.test.mongodb.net';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://catalog:catalog2@cluster0.wrnofgi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 const MONGO_DB = process.env.MONGO_DB || 'update_catalog';
-let db, metaCollection;
+let db, metaCollection, basketCollection;
 
 MongoClient.connect(MONGO_URI, { useUnifiedTopology: true })
-  .then(client => {
+  .then(async client => {
     db = client.db(MONGO_DB);
     metaCollection = db.collection('metadata');
+    basketCollection = db.collection('baskets');
     console.log('Connected to MongoDB');
+
+    // Restore baskets on server start
+    const allBaskets = await basketCollection.find({}).toArray();
+    for (const b of allBaskets) {
+      serverBaskets[b.sid] = b.items || [];
+    }
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
+// -------------------- In-memory basket cache --------------------
+const serverBaskets = {};
+
+// -------------------- Metadata helpers --------------------
 async function readMetadata() {
   return metaCollection ? await metaCollection.find({}).toArray() : [];
 }
@@ -84,13 +95,10 @@ async function addMetadata(entry) {
   if (metaCollection) await metaCollection.insertOne(entry);
 }
 
-// -------------------- JSON Backup --------------------
 const JSON_FILE = path.join(__dirname, 'metadata.json');
 async function saveMetadataJSON(entry) {
   let data = [];
-  if (fs.existsSync(JSON_FILE)) {
-    data = JSON.parse(fs.readFileSync(JSON_FILE, 'utf8'));
-  }
+  if (fs.existsSync(JSON_FILE)) data = JSON.parse(fs.readFileSync(JSON_FILE, 'utf8'));
   data.push(entry);
   fs.writeFileSync(JSON_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
@@ -168,10 +176,10 @@ if(isIE){
 <div class="pagination" id="pagination" role="navigation" aria-label="Pagination"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 <script>
-// -------------------- Table & Basket JS --------------------
+const socket = io();
 let currentPage=1, rowsPerPage=10;
-let sortOrders=[];
 let filters = {};
 let selectedRows = new Set();
 
@@ -189,39 +197,38 @@ table.querySelectorAll('th .resizer').forEach(resizer=>{
 function resizeColumn(e){ const width = startWidth + (e.pageX - startX); if(width>30) resizerTh.style.width = width + 'px'; }
 function stopResize(){ document.removeEventListener('mousemove',resizeColumn); document.removeEventListener('mouseup',stopResize); }
 
-// -------------------- Basket Functions (IE-only) --------------------
-async function fetchServerBasket(){ if(!isIE) return []; return fetch('/api/basket').then(r=>r.json()); }
-async function updateServerBasket(kb,add){ if(!isIE) return; return fetch('/api/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kb,add})}); }
+// -------------------- Basket Functions --------------------
+async function fetchServerBasket(){ return fetch('/api/basket').then(r=>r.json()); }
+async function updateServerBasket(kb,add){ return fetch('/api/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kb,add})}); }
 
 async function initHybridBasket(){
-  if(!isIE) return;
-  let localBasket=localStorage.getItem('ieBasket'); 
+  let localBasket = localStorage.getItem('ieBasket'); 
   localBasket = localBasket?localBasket.split(",").map(Number):[];
   const serverBasket = await fetchServerBasket();
   const mergedBasket = Array.from(new Set([...localBasket,...serverBasket]));
   localStorage.setItem('ieBasket',mergedBasket.join(","));
   for(const kb of mergedBasket) await updateServerBasket(kb,true);
   mergedBasket.forEach(kb=>selectedRows.add(kb));
+  updateBasketCount();
 }
 
 function toggleHybridBasket(kb,checkbox){
-  if(!isIE) return;
   if(checkbox.checked) selectedRows.add(kb); else selectedRows.delete(kb);
   let basket=localStorage.getItem('ieBasket'); basket=basket?basket.split(",").map(Number):[];
   if(checkbox.checked){ if(!basket.includes(kb)) basket.push(kb); updateServerBasket(kb,true);}
   else{ const idx=basket.indexOf(kb); if(idx!==-1) basket.splice(idx,1); updateServerBasket(kb,false);}
-  localStorage.setItem('ieBasket',basket.join(",")); updateBasketCount(); highlightRows();
+  localStorage.setItem('ieBasket',basket.join(","));
+  updateBasketCount(); highlightRows();
+  socket.emit('basketUpdate', Array.from(selectedRows)); // real-time
 }
 
-async function updateBasketCount(){ 
-  if(!isIE) return;
+function updateBasketCount(){ 
   const basketCountElem = document.getElementById('basketCount');
-  if(basketCountElem) basketCountElem.innerHTML = selectedRows.size;
+  if (basketCountElem) basketCountElem.innerHTML = selectedRows.size;
   basketCountElem?.setAttribute('aria-label','Basket contains '+selectedRows.size+' items');
 }
 
 function highlightRows(){
-  if(!isIE) return;
   document.querySelectorAll('#fileTable tbody tr').forEach(tr=>{
     const cb = tr.querySelector('input[type="checkbox"]');
     const kb = parseInt(cb?.getAttribute('data-kb'));
@@ -231,7 +238,7 @@ function highlightRows(){
 }
 
 function viewBasket(){
-  if(!isIE || selectedRows.size===0){alert('Basket empty'); return;}
+  if(selectedRows.size===0){alert('Basket empty'); return;}
   let msg = "Basket contains:\\n";
   selectedRows.forEach(kb=>{
     const link=document.getElementById('kbLink'+kb);
@@ -240,9 +247,8 @@ function viewBasket(){
   alert(msg);
 }
 
-// -------------------- Download basket client-side (IE-only) --------------------
 async function downloadBasketClient(){
-  if(!isIE || selectedRows.size===0){ alert('Basket empty'); return; }
+  if(selectedRows.size===0){ alert('Basket empty'); return; }
   const zip = new JSZip();
   const promises = [];
   selectedRows.forEach(kb=>{
@@ -262,10 +268,14 @@ async function downloadBasketClient(){
   });
 }
 
-function selectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=true; cb.onchange(); }); }
-function deselectAllBasket(){ if(!isIE) return; document.querySelectorAll('#fileTable tbody input[type="checkbox"]').forEach(cb=>{ cb.checked=false; cb.onchange(); }); }
+// -------------------- Real-time Basket Updates --------------------
+socket.on('basketUpdate', (basketArray) => {
+  selectedRows = new Set(basketArray);
+  localStorage.setItem('ieBasket', Array.from(selectedRows).join(","));
+  highlightRows();
+  updateBasketCount();
+});
 
-// -------------------- Fetch & Render Table --------------------
 function highlightText(text){ 
   let result = text;
   for(const col in filters){ 
@@ -290,11 +300,11 @@ async function fetchTable(){
       <td role="gridcell">\${highlightText(f.tag || '-')}</td>
       <td role="gridcell">\${new Date(f.uploadTime).toLocaleString()}</td>
       <td role="gridcell"><a id="kbLink\${f.kb}" href="/uploads/\${f.filePath}" download>\${f.name}</a></td>
-      <td role="gridcell">\${isIE ? '<input type="checkbox" data-kb="'+f.kb+'" onchange="toggleHybridBasket('+f.kb+',this)" tabindex="0" aria-label="Add KB'+f.kb+' to basket">' : ''}</td>
+      <td role="gridcell"><input type="checkbox" data-kb="\${f.kb}" onchange="toggleHybridBasket(\${f.kb},this)" tabindex="0" aria-label="Add KB\${f.kb} to basket"></td>
     \`;
     tbody.appendChild(tr);
   });
-  highlightRows(); updateBasketCount(); renderPagination(data.totalPages);
+  highlightRows(); updateBasketCount();
 }
 
 function renderPagination(totalPages){
@@ -311,65 +321,28 @@ function renderPagination(totalPages){
   }
 }
 
-window.onload=function(){ if(isIE) initHybridBasket().then(()=>fetchTable()); else fetchTable(); };
+window.onload=function(){ initHybridBasket().then(()=>fetchTable()); };
 </script>
 </div></body></html>`;
-
   res.send(html);
 });
 
 // -------------------- Upload Page --------------------
 app.get('/upload', authMiddleware, (req,res)=>{
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Upload File</title>
-<style>
-body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;padding:20px;background:#f4f4f4;}
-form{background:#fff;padding:20px;border:1px solid #ccc;width:400px;margin:auto;border-radius:4px;position:relative;}
-label{display:block;margin:10px 0 5px;}
-input,button{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ccc;border-radius:2px;}
-button{background:#0078d7;color:#fff;border:none;cursor:pointer;}
-button:hover{background:#005a9e;}
-a{display:block;margin-top:10px;text-align:center;color:#0078d7;text-decoration:none;}
-#progressContainer{margin-top:10px;background:#eee;border-radius:4px;overflow:hidden;display:none;}
-#progressBar{height:20px;background:#0078d7;width:0%;text-align:center;color:#fff;line-height:20px;}
-</style></head>
-<body>
-<form id="uploadForm">
-<label for="kb">KB Number</label><input type="number" name="kb" id="kb" required>
-<label for="file">Select File</label><input type="file" name="file" id="file" required>
-<label for="description">Description</label><input type="text" name="description" id="description">
-<label for="tag">Tag</label><input type="text" name="tag" id="tag">
-<button type="submit">Upload</button>
-<div id="progressContainer"><div id="progressBar">0%</div></div>
-<a href="/">Back to Catalog</a>
-</form>
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Upload File</title></head><body>
+<form id="uploadForm" enctype="multipart/form-data">
+<label>KB Number<input type="number" name="kb" required></label>
+<label>File<input type="file" name="file" required></label>
+<label>Description<input type="text" name="description"></label>
+<label>Tag<input type="text" name="tag"></label>
+<button type="submit">Upload</button></form>
 <script>
-document.getElementById('uploadForm').addEventListener('submit',async function(e){
-  e.preventDefault();
-  const kb=document.getElementById('kb').value;
-  const file=document.getElementById('file').files[0];
-  const description=document.getElementById('description').value;
-  const tag=document.getElementById('tag').value;
-  if(!file) return alert('Select file');
-  const formData=new FormData();
-  formData.append('kb',kb); formData.append('file',file); formData.append('description',description); formData.append('tag',tag);
-
-  const xhr=new XMLHttpRequest();
-  xhr.open('POST','/upload',true);
-  xhr.upload.onprogress=function(e){ 
-    if(e.lengthComputable){ 
-      document.getElementById('progressContainer').style.display='block';
-      let percent=Math.round(e.loaded/e.total*100); 
-      document.getElementById('progressBar').style.width=percent+'%'; 
-      document.getElementById('progressBar').textContent=percent+'%'; 
-    }
-  };
-  xhr.onload=function(){ alert(xhr.responseText); if(xhr.status===200) location.href='/'; };
-  xhr.send(formData);
+document.getElementById('uploadForm').addEventListener('submit',function(e){
+e.preventDefault();
+const fd=new FormData(this);
+fetch('/upload',{method:'POST',body:fd}).then(r=>r.text()).then(alert);
 });
-</script>
-</body></html>`);
+</script></body></html>`);
 });
 
 // -------------------- Upload POST with Deny List --------------------
@@ -408,20 +381,17 @@ app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
       kb: parseInt(kb),
       name: file.originalname,
       originalFileName: file.originalname,
-      description,
-      tag,
-      uploadTime: new Date(),
-      filePath: file.filename
+      description: description || '',
+      tag: tag || '',
+      filePath: file.filename,
+      uploadTime: new Date()
     };
 
     await addMetadata(metadataEntry);
     await saveMetadataJSON(metadataEntry);
 
-    res.send('Uploaded successfully');
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Server error');
-  }
+    res.send('File uploaded successfully.');
+  } catch(err){ console.error(err); res.status(500).send('Upload error'); }
 });
 
 // -------------------- API: List Updates --------------------
@@ -434,20 +404,46 @@ app.get('/api/list-update', async (req,res)=>{
   res.json({data,totalPages});
 });
 
-// -------------------- API: Basket (IE-only) --------------------
-app.get('/api/basket', (req,res)=>{
+// -------------------- API: Basket --------------------
+app.get('/api/basket', async (req,res)=>{
   const sid = getSessionId(req,res);
-  res.json(serverBaskets[sid] || []);
+  let items = serverBaskets[sid] || [];
+  res.json(items);
 });
 
-app.post('/api/basket', (req,res)=>{
+app.post('/api/basket', async (req,res)=>{
   const sid = getSessionId(req,res);
   const { kb, add } = req.body;
   if (!serverBaskets[sid]) serverBaskets[sid] = [];
   if (add && !serverBaskets[sid].includes(kb)) serverBaskets[sid].push(kb);
   if (!add) serverBaskets[sid] = serverBaskets[sid].filter(k=>k!==kb);
-  res.json({basket:serverBaskets[sid]});
+
+  // Persist to MongoDB automatically
+  if (basketCollection) {
+    await basketCollection.updateOne(
+      { sid },
+      { $set: { items: serverBaskets[sid] } },
+      { upsert: true }
+    );
+  }
+
+  // Notify all sockets about updated basket for this session
+  io.emit('basketUpdate', serverBaskets[sid]);
+
+  res.json({basket: serverBaskets[sid]});
+});
+
+// -------------------- Socket.IO Connection --------------------
+io.on('connection', (socket) => {
+  console.log('Socket connected:', socket.id);
+
+  socket.on('basketUpdate', (basketArray) => {
+    // Broadcast to all other clients
+    socket.broadcast.emit('basketUpdate', basketArray);
+  });
+
+  socket.on('disconnect', () => console.log('Socket disconnected:', socket.id));
 });
 
 // -------------------- Start Server --------------------
-app.listen(PORT,()=>console.log(`Catalog server running on port ${PORT}`));
+server.listen(PORT,()=>console.log(`Catalog server running on port ${PORT}`));

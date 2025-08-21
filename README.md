@@ -1,6 +1,6 @@
 Introducing Microsoft Update Catalog based on nodejs.
 
-# DEMO: https://catalog.update.microsoft.page.gd
+# DEMO: https://catalog.update.microsoft.page.gd 
 
 # How I can deploy?
 You need to a VPS, local or cloud (like Render (aka https://dashboard.render.com)) to deploy yourself.
